@@ -1,0 +1,5 @@
+./services/ml-core/.venv/
+__pycache__/
+*.pyc
+.env
+.vscode
