@@ -1,0 +1,646 @@
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ForbiddenException,
+  type OnModuleInit,
+  type OnModuleDestroy,
+} from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { ConfigService } from '@nestjs/config';
+import * as path from 'path';
+
+import { firstValueFrom, timeout } from 'rxjs';
+import * as Tesseract from 'tesseract.js';
+import { z } from 'zod';
+
+import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
+import { CloudinaryService } from '../common/cloudinary/cloudinary.service';
+import { withRetry } from '../common/utils/retry.util';
+import {
+  CircuitBreaker,
+  CircuitState,
+} from '../common/utils/circuit-breaker.util';
+import {
+  OcrProcessingException,
+  InvalidImageException,
+  InsufficientTextException,
+} from './exceptions/scan.exceptions';
+import type { GeminiAnalysis, ServiceHealth } from './dto/scan.dto';
+import { LlmLanguageProvider } from '../llm-core/llm.provider';
+
+const CONFIG = {
+  OCR_MIN_TEXT_LENGTH: 5,
+  OCR_MAX_TEXT_LENGTH: 5000,
+  ML_SERVICE_TIMEOUT_MS: 10000,
+  LLM_TIMEOUT_MS: 30000,
+  CACHE_TTL: 3600,
+  MAX_IMAGE_SIZE_BYTES: 10 * 1024 * 1024,
+  SUPPORTED_IMAGE_SIGNATURES: [
+    { signature: [0xff, 0xd8, 0xff], mime: 'image/jpeg' },
+    { signature: [0x89, 0x50, 0x4e, 0x47], mime: 'image/png' },
+    { signature: [0x47, 0x49, 0x46], mime: 'image/gif' },
+    { signature: [0x52, 0x49, 0x46, 0x46], mime: 'image/webp' },
+  ],
+} as const;
+
+export function getNovaDescription(score: number): string {
+  const map = {
+    1: 'Unprocessed',
+    2: 'Culinary Ingredient',
+    3: 'Processed',
+    4: 'Ultra-Processed',
+  };
+  return map[score] || 'Unknown';
+}
+
+const MLServiceResponseSchema = z.object({
+  nova_group: z.number().min(1).max(4),
+  confidence: z.number().min(0).max(1),
+  contributing_ingredients: z.array(z.string()).optional(),
+  processing_reasons: z.array(z.string()).optional(),
+  allergens: z.array(z.string()).optional(),
+});
+
+@Injectable()
+export class ScanService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(ScanService.name);
+  private readonly mlServiceUrl: string;
+
+  private readonly mlCircuitBreaker: CircuitBreaker;
+  private readonly llmCircuitBreaker: CircuitBreaker;
+  private tesseractWorker: Tesseract.Worker | null = null;
+
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+    private readonly cloudinary: CloudinaryService,
+    private readonly redisService: RedisService,
+    private readonly llmProvider: LlmLanguageProvider,
+  ) {
+    const mlUrl = this.configService.get<string>('ML_SERVICE_URL');
+    if (!mlUrl) {
+      this.logger.warn('ML_SERVICE_URL not configured - Using fallback logic.');
+    }
+    this.mlServiceUrl = mlUrl || '';
+
+    this.mlCircuitBreaker = new CircuitBreaker('ML_SERVICE', {
+      failureThreshold: 5,
+      successThreshold: 2,
+      timeout: 60000,
+    });
+
+    this.llmCircuitBreaker = new CircuitBreaker('LLM_SERVICE', {
+      failureThreshold: 3,
+      successThreshold: 1,
+      timeout: 120000,
+    });
+  }
+
+  async onModuleInit(): Promise<void> {
+    try {
+      this.tesseractWorker = await Tesseract.createWorker('eng', 1, {
+        logger: () => {},
+        // Tell Tesseract to use local files instead of downloading
+        langPath: path.join(process.cwd(), 'tessdata'),
+        cachePath: path.join(process.cwd(), 'tessdata'),
+        gzip: false,
+      });
+      this.logger.log('Tesseract worker initialized (Offline Mode)');
+    } catch (error) {
+      // Now this catch block will actually work because the app didn't crash from Redis
+      this.logger.warn('Failed to pre-initialize Tesseract worker:', error);
+    }
+  }
+
+  async onModuleDestroy() {
+    if (this.tesseractWorker) {
+      await this.tesseractWorker.terminate();
+      this.logger.log('Tesseract worker terminated');
+    }
+  }
+
+  async processImageScan(
+    userId: string,
+    imageBuffer: Buffer,
+    correlationId?: string,
+    productName?: string,
+  ) {
+    const logContext = { correlationId, userId };
+    const startTime = Date.now();
+
+    const uploadPromise = this.cloudinary
+      .uploadImage(imageBuffer, 'product-scans')
+      .then((res) => res.secure_url)
+      .catch((err) => {
+        this.logger.error('Failed to upload scan image', err);
+        return null; // Fail gracefully
+      });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { allergies: true },
+    });
+
+    // 1. Check Cache
+    const cacheKey = await this.getCacheKeyFromImage(imageBuffer);
+    const cachedResult = await this.redisService.get(cacheKey);
+    if (cachedResult) {
+      this.logger.log({ message: 'Cache hit', ...logContext });
+      return JSON.parse(cachedResult);
+    }
+
+    this.logger.log({ message: 'Starting image scan', ...logContext });
+
+    // 2. Validate Input
+    this.validateInputs(userId, imageBuffer);
+
+    try {
+      // 3. OCR Processing
+      const ocrStart = Date.now();
+      const { text, confidence: ocrConfidence } =
+        await this.performOcr(imageBuffer);
+
+      this.logger.debug({
+        message: 'OCR completed',
+        durationMs: Date.now() - ocrStart,
+        textLength: text.length,
+        ...logContext,
+      });
+
+      if (!text || text.trim().length < CONFIG.OCR_MIN_TEXT_LENGTH) {
+        throw new InsufficientTextException(
+          'Could not extract sufficient text. Please ensure label is clear.',
+        );
+      }
+
+      const sanitizedText = this.preprocessIngredients(text);
+
+      // 4. ML Classification
+      const mlStart = Date.now();
+      const mlResult = await this.predictNovaWithResilience(sanitizedText);
+
+      const analysis = await this.analyzeWithGeminiResilience(
+        sanitizedText,
+        mlResult.nova_group,
+      );
+
+      this.logger.debug({
+        message: 'ML classification completed',
+        durationMs: Date.now() - mlStart,
+        novaGroup: mlResult.nova_group,
+        confidence: mlResult.confidence,
+        source: mlResult.processing_reasons?.[0] || 'ML Model',
+        ...logContext,
+      });
+
+      const universalDetected = mlResult.allergens || [];
+      const userAllergies = user?.allergies || [];
+      // Intersection: Find items that are in BOTH lists
+      const dangerousMatches = universalDetected.filter((detected) =>
+        userAllergies.includes(detected),
+      );
+
+      const isSafe = dangerousMatches.length === 0;
+      let alertMessage = null;
+      if (!isSafe) {
+        alertMessage = `CRITICAL WARNING: Contains ${dangerousMatches.join(', ')}!`;
+        this.logger.warn(
+          `User ${userId} scanned dangerous food: ${dangerousMatches}`,
+        );
+      }
+
+      const imageUrl = await uploadPromise;
+
+      // 6. Data Sanitization (Preparation for DB)
+      // This is the new step to ensure clean data
+      const finalData = this.sanitizeScanData({
+        userId,
+        rawText: sanitizedText,
+        novaScore: mlResult.nova_group,
+        nutriScore: analysis.nutriScore, // From LLM now (see Part 4)
+        allergens: universalDetected,
+        productName: productName || analysis.productName,
+        additives: analysis.additives,
+        cleanRecipe: analysis.cleanRecipe,
+        ocrConfidence,
+        mlConfidence: mlResult.confidence,
+        functionalCategories: analysis.functionalCategories,
+        estimatedShelfLife: analysis.estimatedShelfLife,
+        isSafe: isSafe,
+        allergenAlert: alertMessage,
+        imageUrl,
+      });
+
+      // 7. DB Persistence
+      const scan = await withRetry(
+        () => this.prisma.productScan.create({ data: finalData }),
+        { maxAttempts: 3, initialDelayMs: 500 },
+        this.logger,
+        'Database save',
+      );
+
+      // 8. Update Cache
+      await this.redisService.setex(
+        cacheKey,
+        CONFIG.CACHE_TTL,
+        JSON.stringify(scan),
+      );
+
+      this.logger.log({
+        message: 'Scan completed successfully',
+        scanId: scan.id,
+        totalDurationMs: Date.now() - startTime,
+        ...logContext,
+      });
+
+      return scan;
+    } catch (error) {
+      this.logger.error({
+        message: 'Image scan failed',
+        error: error.message,
+        stack: error.stack,
+        totalDurationMs: Date.now() - startTime,
+        ...logContext,
+      });
+      throw error;
+    }
+  }
+
+  // --- RETRIEVAL & HISTORY FEATURES (NEW) ---
+
+  /**
+   * Fetch a single scan by ID, ensuring it belongs to the user.
+   */
+  async getScanById(scanId: string, userId: string) {
+    const scan = await this.prisma.productScan.findUnique({
+      where: { id: scanId },
+    });
+
+    if (!scan) throw new NotFoundException('Scan not found');
+    if (scan.userId !== userId) throw new ForbiddenException('Access denied');
+
+    return scan;
+  }
+
+  /**
+   * Fetch all scans for a user with pagination.
+   */
+  async getUserScans(userId: string, limit = 20, offset = 0) {
+    const [data, total] = await Promise.all([
+      this.prisma.productScan.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        skip: offset,
+        // Select fields needed for the list view to save bandwidth
+        select: {
+          id: true,
+          productName: true,
+          novaScore: true,
+          imageUrl: true, // If we had storage, this would be the URL
+          createdAt: true,
+          // We don't send the massive recipe/additives list for the summary view
+        },
+      }),
+      this.prisma.productScan.count({ where: { userId } }),
+    ]);
+
+    return {
+      data,
+      meta: {
+        total,
+        page: Math.floor(offset / limit) + 1,
+        limit,
+      },
+    };
+  }
+
+  /**
+   * Delete a scan from history.
+   */
+  async deleteScan(scanId: string, userId: string) {
+    const scan = await this.prisma.productScan.findUnique({
+      where: { id: scanId },
+    });
+
+    if (!scan) throw new NotFoundException('Scan not found');
+    if (scan.userId !== userId) throw new ForbiddenException('Access denied');
+
+    await this.prisma.productScan.delete({ where: { id: scanId } });
+    return { success: true, message: 'Scan deleted' };
+  }
+
+  // --- HELPER METHODS ---
+
+  private async performOcr(
+    buffer: Buffer,
+  ): Promise<{ text: string; confidence: number }> {
+    try {
+      if (this.tesseractWorker) {
+        const {
+          data: { text, confidence },
+        } = await this.tesseractWorker.recognize(buffer);
+        return { text, confidence };
+      }
+      const result = await Tesseract.recognize(buffer, 'eng', {
+        logger: () => {},
+      });
+      return { text: result.data.text, confidence: result.data.confidence };
+    } catch (error) {
+      throw new OcrProcessingException(
+        'OCR failed. Please try a clearer photo.',
+        error as Error,
+      );
+    }
+  }
+
+  private async predictNovaWithResilience(ingredients: string) {
+    const fallback = () => {
+      this.logger.warn('ML Service unavailable. Using Rule-Based Fallback.');
+      return {
+        nova_group: this.fallbackNovaPrediction(ingredients),
+        confidence: 0.3,
+        processing_reasons: ['Service Circuit Open - Rule Based Fallback'],
+        allergens: [],
+      };
+    };
+
+    if (!this.mlServiceUrl) return fallback();
+
+    return this.mlCircuitBreaker.execute(
+      () =>
+        withRetry(
+          () => this.predictNova(ingredients),
+          {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            retryableErrors: ['ECONNREFUSED', 'ETIMEDOUT', 'timeout'],
+          },
+          this.logger,
+          'ML prediction',
+        ),
+      fallback,
+    );
+  }
+
+  private async predictNova(ingredients: string) {
+    const { data } = await firstValueFrom(
+      this.httpService
+        .post(
+          `${this.mlServiceUrl}/predict`,
+          { ingredients },
+          { timeout: CONFIG.ML_SERVICE_TIMEOUT_MS },
+        )
+        .pipe(timeout(CONFIG.ML_SERVICE_TIMEOUT_MS)),
+    );
+    const validated = MLServiceResponseSchema.parse(data);
+    if (validated.confidence < 0.5) {
+      this.logger.warn(
+        `Low ML confidence (${validated.confidence}). Hybrid fallback.`,
+      );
+      return {
+        ...validated,
+        nova_group: this.fallbackNovaPrediction(ingredients),
+        allergens: null,
+      };
+    }
+    return validated;
+  }
+
+  private async analyzeWithGeminiResilience(
+    ingredients: string,
+    novaScore: number,
+  ): Promise<GeminiAnalysis> {
+    const fallback = (): GeminiAnalysis => ({
+      productName: 'Scanned Product',
+      additives: this.extractAdditivesFromText(ingredients),
+      cleanRecipe: this.generateBasicRecipe(ingredients, novaScore),
+      functionalCategories: [],
+      estimatedShelfLife: 'Unknown',
+    });
+
+    return this.llmCircuitBreaker.execute(
+      () =>
+        withRetry(
+          () => this.llmProvider.analyzeIngredients(ingredients, novaScore),
+          {
+            maxAttempts: 2,
+            initialDelayMs: 1000,
+            retryableErrors: ['429', '503', 'timeout'],
+          },
+          this.logger,
+          `LLM analysis (${this.llmProvider.getProviderName()})`,
+        ),
+      fallback,
+    );
+  }
+
+  // --- DATA SANITIZATION (NEW) ---
+  /**
+   * Prepares raw data for the database:
+   * 1. Converts to Title Case for display names.
+   * 2. Trims whitespace.
+   * 3. Ensures defaults for optional fields.
+   */
+  private sanitizeScanData(data: any) {
+    const toTitleCase = (str: string) => {
+      if (!str) return '';
+      return str.replace(
+        /\w\S*/g,
+        (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase(),
+      );
+    };
+
+    return {
+      userId: data.userId,
+      rawText: data.rawText?.trim(), // This is the image text for frontend
+      novaScore: data.novaScore,
+      imageUrl: data.imageUrl || null,
+      // Clean product name
+      productName: toTitleCase(data.productName || 'Unknown Product').substring(
+        0,
+        100,
+      ),
+
+      // Ensure additives is a valid object/array
+      additives: data.additives || [],
+
+      // Clean recipe
+      cleanRecipe: data.cleanRecipe?.trim() || 'No recipe available.',
+
+      // Metrics
+      ocrConfidence: data.ocrConfidence
+        ? parseFloat(data.ocrConfidence.toFixed(2))
+        : null,
+      mlConfidence: data.mlConfidence
+        ? parseFloat(data.mlConfidence.toFixed(2))
+        : null,
+
+      // Categories (ensure array of title-cased strings)
+      functionalCategories: Array.isArray(data.functionalCategories)
+        ? data.functionalCategories.map((c: string) => toTitleCase(c.trim()))
+        : [],
+
+      estimatedShelfLife: data.estimatedShelfLife?.trim() || 'Unknown',
+      isSafe: data.isSafe,
+      allergenAlert: data.allergenAlert,
+    };
+  }
+
+  // --- UTILS ---
+  private validateInputs(userId: string, imageBuffer: Buffer): void {
+    if (!userId) throw new InvalidImageException('Invalid User ID');
+    if (!imageBuffer || imageBuffer.length === 0)
+      throw new InvalidImageException('Empty Image');
+    if (imageBuffer.length > CONFIG.MAX_IMAGE_SIZE_BYTES)
+      throw new InvalidImageException('Image too large');
+
+    const isValidSignature = CONFIG.SUPPORTED_IMAGE_SIGNATURES.some((format) =>
+      format.signature.every((byte, index) => imageBuffer[index] === byte),
+    );
+    if (!isValidSignature)
+      throw new InvalidImageException('Invalid image format.');
+  }
+
+  private preprocessIngredients(text: string): string {
+    return text
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/[|_\\/<>]/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/,(\s*),/g, ',')
+      .substring(0, CONFIG.OCR_MAX_TEXT_LENGTH)
+      .trim()
+      .toLowerCase();
+  }
+
+  private async getCacheKeyFromImage(buffer: Buffer): Promise<string> {
+    const crypto = await import('crypto');
+    return `scan:${crypto.createHash('md5').update(buffer).digest('hex')}`;
+  }
+
+  private fallbackNovaPrediction(ingredients: string): number {
+    const upfIndicators = [
+      'maltodextrin',
+      'hydrogenated',
+      'high fructose',
+      'monosodium glutamate',
+      'carrageenan',
+      'xanthan gum',
+      'aspartame',
+      'sucralose',
+      'red 40',
+      'yellow 5',
+    ];
+    const simpleIngredients = [
+      'water',
+      'salt',
+      'sugar',
+      'flour',
+      'eggs',
+      'milk',
+      'yeast',
+      'butter',
+      'oil',
+    ];
+    const text = ingredients.toLowerCase();
+    const matches = upfIndicators.filter((i) => text.includes(i));
+    if (matches.length >= 3) return 4;
+    if (matches.length >= 1) return 3;
+    const simpleMatches = simpleIngredients.filter((i) => text.includes(i));
+    if (simpleMatches.length >= 3 && matches.length === 0) return 1;
+    return 2;
+  }
+
+  private extractAdditivesFromText(ingredients: string): Array<any> {
+    const additivePatterns = [
+      {
+        pattern: /(xanthan|guar|carrageenan) gum/i,
+        function: 'Thickener',
+        risk: 'Low',
+      },
+      {
+        pattern: /(tbhq|bht|benzoate|sorbate)/i,
+        function: 'Preservative',
+        risk: 'Medium',
+      },
+      { pattern: /e\d{3,4}/i, function: 'Additive', risk: 'Unknown' },
+    ];
+    const results = [];
+    for (const p of additivePatterns) {
+      const match = ingredients.match(p.pattern);
+      if (match)
+        results.push({
+          name: match[0],
+          function: p.function,
+          risk: p.risk,
+          explanation: 'Rule-based detection',
+        });
+    }
+    return results;
+  }
+
+  private generateBasicRecipe(ingredients: string, score: number): string {
+    return score >= 3
+      ? 'This product contains industrial additives. Try making a version with whole ingredients like flour, sugar, and butter.'
+      : 'This product is minimally processed. You can recreate it using similar fresh ingredients.';
+  }
+
+  async checkHealth(): Promise<ServiceHealth[]> {
+    const providerName = this.llmProvider.getProviderName();
+    const checks = [
+      this.checkService(
+        'ML_SERVICE',
+        () =>
+          firstValueFrom(
+            this.httpService
+              .get(`${this.mlServiceUrl}/health`)
+              .pipe(timeout(2000)),
+          ),
+        this.mlCircuitBreaker,
+      ),
+      this.checkService(
+        `LLM_SERVICE (${providerName})`,
+        async () => {
+          const isHealthy = await this.llmProvider.checkHealth();
+          if (!isHealthy)
+            throw new Error('LLM Provider reported unhealthy status');
+        },
+        this.llmCircuitBreaker,
+      ),
+      this.checkService(
+        'DATABASE',
+        () => this.prisma.$queryRaw`SELECT 1`,
+        null,
+      ),
+    ];
+    return Promise.all(checks);
+  }
+
+  private async checkService(
+    name: string,
+    checkFn: () => Promise<any>,
+    cb: CircuitBreaker | null,
+  ): Promise<ServiceHealth> {
+    const start = Date.now();
+    try {
+      await checkFn();
+      return {
+        service: name,
+        status: 'healthy',
+        latencyMs: Date.now() - start,
+        lastChecked: new Date(),
+      };
+    } catch (e) {
+      return {
+        service: name,
+        status: cb?.getState() === CircuitState.OPEN ? 'unhealthy' : 'degraded',
+        latencyMs: Date.now() - start,
+        lastChecked: new Date(),
+        details: e.message,
+      };
+    }
+  }
+}
