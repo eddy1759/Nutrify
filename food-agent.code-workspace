@@ -1,0 +1,32 @@
+{
+  "folders": [
+    {
+      "name": "🤖 ML Core (Python)",
+      "path": "services/ml-core"
+    },
+    {
+      "name": "⚡ API (NestJS)",
+      "path": "services/api"
+    },
+    {
+      "name": "🐳 Infrastructure",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "files.exclude": {
+      "**/.git": true,
+      "**/.DS_Store": true,
+      "**/__pycache__": true,
+      "**/.venv": true,
+      "**/node_modules": true
+    },
+    "[python]": {
+      "editor.defaultFormatter": "ms-python.python"
+    },
+    "[typescript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
+  }
+}
