@@ -1,0 +1,682 @@
+{
+  "info": {
+    "_postman_id": "c7b8d9e0-1f2a-4b3c-9d8e-5f6g7h8i9j0k",
+    "name": "NutrifyAI Platform API",
+    "description": "# NutrifyAI Backend API\n\nThis collection covers the full lifecycle of the NutrifyAI platform, including:\n\n* **Authentication:** JWT handling, OTP verification, and secure password resets.\n* **Core Scanning:** Tesseract OCR + Python BERT classification pipeline.\n* **AI Agents:** Nutrition analysis, Meal planning (LLM), and Recipe generation.\n\n## Setup\n\n1.  Ensure your NestJS server is running at `{{baseUrl}}`.\n2.  Register a new user or use the **Login** endpoint to start.\n3.  Tokens are **automatically saved** to your environment variables upon successful login.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "item": [
+        {
+          "name": "1. Register User",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"SecurePass123!\",\n    \"name\": \"Healthy User\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "register"]
+            },
+            "description": "Registers a new user. Triggers an email with a 6-digit OTP.\n\n**Next Step:** Check your server logs (or email) for the OTP and use it in the \"Verify OTP\" request."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Verify OTP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.access_token) {",
+                  "    pm.collectionVariables.set(\"accessToken\", jsonData.access_token);",
+                  "    pm.collectionVariables.set(\"refreshToken\", jsonData.refresh_token);",
+                  "    console.log(\"✅ Account Verified & Tokens Saved\");",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"user@example.com\",\n    \"otp\": \"123456\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/verify-otp",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "verify-otp"]
+            },
+            "description": "Verifies the email address. \n\n**Auto-Script:** On success, this automatically saves the `accessToken` and `refreshToken` to your environment."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.access_token) {",
+                  "    pm.collectionVariables.set(\"accessToken\", jsonData.access_token);",
+                  "    pm.collectionVariables.set(\"refreshToken\", jsonData.refresh_token);",
+                  "    console.log(\"✅ Login Successful - Tokens Updated\");",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"user@example.com\",\n    \"password\": \"SecurePass123!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "description": "Standard login.\n\n**Auto-Script:** Updates your `accessToken` automatically."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Refresh Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.access_token) {",
+                  "    pm.collectionVariables.set(\"accessToken\", jsonData.access_token);",
+                  "    pm.collectionVariables.set(\"refreshToken\", jsonData.refresh_token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{refreshToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "refresh"]
+            },
+            "description": "Uses the long-lived `refreshToken` to get a fresh `accessToken` without logging in again."
+          },
+          "response": []
+        },
+        {
+          "name": "5. Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"user@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/forgot-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "forgot-password"]
+            },
+            "description": "Initiates the password reset flow. Sends an OTP email."
+          },
+          "response": []
+        },
+        {
+          "name": "6. Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"email\": \"user@example.com\",\n    \"otp\": \"123456\",\n    \"newPassword\": \"NewSecurePass456!\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/reset-password",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "reset-password"]
+            },
+            "description": "Completes the password reset using the OTP."
+          },
+          "response": []
+        },
+        {
+          "name": "7. Logout",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Invalidates the refresh token on the server."
+          },
+          "response": []
+        }
+      ],
+      "description": "Handles User Registration, Login, and Security."
+    },
+    {
+      "name": "📸 Core Scanning",
+      "item": [
+        {
+          "name": "Analyze Image (Main)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-correlation-id",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "description": "Upload a JPG/PNG of an ingredient label"
+                },
+                {
+                  "key": "productName",
+                  "value": "Test Product",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/scan/analyze",
+              "host": ["{{baseUrl}}"],
+              "path": ["scan", "analyze"]
+            },
+            "description": "The heart of the application. \n1. Uploads an image.\n2. OCR extracts text.\n3. ML classifies processing level.\n4. LLM extracts additives and allergens.\n\n**Note:** You must manually select a file in the Body -> Form-data tab."
+          },
+          "response": []
+        },
+        {
+          "name": "Get User History",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/scan/history?limit=10&page=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["scan", "history"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Returns a paginated list of past scans."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Scan Details",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/scan/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["scan", ":id"],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "REPLACE_WITH_UUID",
+                  "description": "The ID returned from Analyze or History"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "System Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/scan/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["scan", "health"]
+            },
+            "description": "Checks connectivity to Postgres, Redis, Python ML Service, and LLM Provider."
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoints related to the Food Label Scanner."
+    },
+    {
+      "name": "🤖 AI Agents",
+      "item": [
+        {
+          "name": "🥗 Nutritionist",
+          "item": [
+            {
+              "name": "Analyze Meal Photo",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "image",
+                      "type": "file",
+                      "description": "Photo of a plate of food"
+                    },
+                    {
+                      "key": "mealType",
+                      "value": "Lunch",
+                      "type": "text"
+                    },
+                    {
+                      "key": "context",
+                      "value": "I didn't eat the bread",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/calories/analyze",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "calories", "analyze"]
+                },
+                "description": "Estimates calories from a photo. \nReturns `AUTO_LOGGED` if confidence is high, or `REQUIRES_REVIEW` if low."
+              },
+              "response": []
+            },
+            {
+              "name": "Confirm/Edit Log",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"mealType\": \"Dinner\",\n    \"data\": {\n        \"foodName\": \"Grilled Salmon\",\n        \"macros\": {\n            \"calories\": 450,\n            \"protein\": 40,\n            \"carbs\": 0,\n            \"fat\": 20\n        },\n        \"confidence\": 0.95\n    }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/calories/confirm",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "calories", "confirm"]
+                },
+                "description": "Manually saves a log entry (used when AI confidence was low)."
+              },
+              "response": []
+            },
+            {
+              "name": "Daily Summary",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/agents/calories/summary?date=2023-12-01",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "calories", "summary"],
+                  "query": [
+                    {
+                      "key": "date",
+                      "value": "2023-12-01",
+                      "description": "YYYY-MM-DD"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "📅 Meal Planner",
+          "item": [
+            {
+              "name": "Generate Weekly Plan",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"preferences\": \"High protein, no pork, I love avocados\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/planner/generate",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "planner", "generate"]
+                },
+                "description": "Uses LLM to create a 7-day meal plan based on user allergies (from profile) and preferences."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Latest Plan",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/agents/planner/latest",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "planner", "latest"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Shopping List",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{baseUrl}}/agents/planner/:planId/shopping-list",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "planner", ":planId", "shopping-list"],
+                  "variable": [
+                    {
+                      "key": "planId",
+                      "value": "UUID_HERE"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "👨‍🍳 Chef Mode",
+          "item": [
+            {
+              "name": "Suggest Recipes",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"ingredients\": [\"Chicken Breast\", \"Lemon\", \"Rice\", \"Garlic\"],\n    \"context\": \"I want something quick for dinner\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/recipes/suggest",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "recipes", "suggest"]
+                },
+                "description": "\"Fridge Mode\" - Suggests recipes based on what you have."
+              },
+              "response": []
+            },
+            {
+              "name": "Modify Recipe",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"recipe\": \"Spaghetti Bolognese with beef...\",\n    \"request\": \"Make it vegan and gluten-free\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/recipes/modify",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "recipes", "modify"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Save Recipe",
+              "request": {
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n    \"recipe\": {\n        \"recipeName\": \"Vegan Lemon Chicken\",\n        \"description\": \"Plant based version...\",\n        \"ingredients\": [],\n        \"instructions\": [],\n        \"macrosPerServing\": {\n            \"calories\": 300,\n            \"protein\": 20,\n            \"carbs\": 10,\n            \"fat\": 5\n        },\n        \"prepTimeMinutes\": 15,\n        \"cookTimeMinutes\": 20,\n        \"difficulty\": \"Easy\"\n    }\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/agents/recipes/save",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["agents", "recipes", "save"]
+                },
+                "description": "Saves a generated recipe to the user's cookbook."
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}
