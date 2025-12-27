@@ -13,7 +13,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { AtGuard } from '../../auth/guard/at.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { NutritionistAgent } from '../nutritionist.agent';
-import { CalorieAnalysisResult, MealType } from '../types/nutrition.types';
+import { MealType } from '../types/nutrition.types';
 
 @Controller('agents/calories') // Base route: /agents/calories
 @UseGuards(AtGuard)
@@ -40,12 +40,13 @@ export class NutritionController {
     );
   }
 
-  @Post('confirm') // -> /agents/calories/confirm
+  @Post('confirm')
   async confirmLog(
-    @Body() body: { data: CalorieAnalysisResult; mealType: MealType },
     @CurrentUser('id') userId: string,
+    @Body('logId') logId: string,
+    @Body('overrides') overrides?: any,
   ) {
-    return this.nutritionist.logToDatabase(userId, body.data, body.mealType);
+    return this.nutritionist.confirmMealLog(userId, logId, overrides);
   }
 
   @Get('summary') // -> /agents/calories/summary
