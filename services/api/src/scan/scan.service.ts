@@ -13,6 +13,7 @@ import * as path from 'path';
 import { firstValueFrom, timeout } from 'rxjs';
 import * as Tesseract from 'tesseract.js';
 import { z } from 'zod';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -29,6 +30,7 @@ import {
 } from './exceptions/scan.exceptions';
 import type { GeminiAnalysis, ServiceHealth } from './dto/scan.dto';
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
+import { ProductScan } from '@prisma/client';
 
 const CONFIG = {
   OCR_MIN_TEXT_LENGTH: 5,
@@ -79,6 +81,7 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     private readonly cloudinary: CloudinaryService,
     private readonly redisService: RedisService,
     private readonly llmProvider: LlmLanguageProvider,
+    private readonly amqpConnection: AmqpConnection,
   ) {
     const mlUrl = this.configService.get<string>('ML_SERVICE_URL');
     if (!mlUrl) {
@@ -110,7 +113,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
       });
       this.logger.log('Tesseract worker initialized (Offline Mode)');
     } catch (error) {
-      // Now this catch block will actually work because the app didn't crash from Redis
       this.logger.warn('Failed to pre-initialize Tesseract worker:', error);
     }
   }
@@ -131,6 +133,20 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     const logContext = { correlationId, userId };
     const startTime = Date.now();
 
+    // Check Cache
+    const cacheKey = await this.getCacheKeyFromImage(imageBuffer);
+    const cachedResult = await this.redisService.get<ProductScan>(cacheKey);
+
+    if (cachedResult) {
+      this.logger.log({
+        message: '⚡ Cache hit - Returning instant result',
+        ...logContext,
+      });
+      return cachedResult;
+    }
+
+    this.logger.log({ message: 'Starting image scan', ...logContext });
+
     const uploadPromise = this.cloudinary
       .uploadImage(imageBuffer, 'product-scans')
       .then((res) => res.secure_url)
@@ -139,36 +155,28 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         return null; // Fail gracefully
       });
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { allergies: true },
-    });
-
-    // 1. Check Cache
-    const cacheKey = await this.getCacheKeyFromImage(imageBuffer);
-    const cachedResult = await this.redisService.get(cacheKey);
-    if (cachedResult) {
-      this.logger.log({ message: 'Cache hit', ...logContext });
-      return JSON.parse(cachedResult);
-    }
-
-    this.logger.log({ message: 'Starting image scan', ...logContext });
-
-    // 2. Validate Input
+    // Validate Input
     this.validateInputs(userId, imageBuffer);
 
     try {
-      // 3. OCR Processing
+      const userPromise = this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { allergies: true },
+      });
+
+      // OCR Processing
       const ocrStart = Date.now();
       const { text, confidence: ocrConfidence } =
         await this.performOcr(imageBuffer);
 
-      this.logger.debug({
-        message: 'OCR completed',
-        durationMs: Date.now() - ocrStart,
-        textLength: text.length,
-        ...logContext,
-      });
+      if (this.configService.get<string>('NODE_ENV') === 'development') {
+        this.logger.debug({
+          message: 'OCR completed',
+          durationMs: Date.now() - ocrStart,
+          textLength: text.length,
+          ...logContext,
+        });
+      }
 
       if (!text || text.trim().length < CONFIG.OCR_MIN_TEXT_LENGTH) {
         throw new InsufficientTextException(
@@ -178,27 +186,29 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
 
       const sanitizedText = this.preprocessIngredients(text);
 
-      // 4. ML Classification
+      // ML Classification
       const mlStart = Date.now();
       const mlResult = await this.predictNovaWithResilience(sanitizedText);
-
       const analysis = await this.analyzeWithGeminiResilience(
         sanitizedText,
         mlResult.nova_group,
       );
 
-      this.logger.debug({
-        message: 'ML classification completed',
-        durationMs: Date.now() - mlStart,
-        novaGroup: mlResult.nova_group,
-        confidence: mlResult.confidence,
-        source: mlResult.processing_reasons?.[0] || 'ML Model',
-        ...logContext,
-      });
+      if (this.configService.get<string>('NODE_ENV') === 'development') {
+        this.logger.debug({
+          message: 'ML classification completed',
+          durationMs: Date.now() - mlStart,
+          novaGroup: mlResult.nova_group,
+          confidence: mlResult.confidence,
+          source: mlResult.processing_reasons?.[0] || 'ML Model',
+          ...logContext,
+        });
+      }
 
+      const user = await userPromise;
       const universalDetected = mlResult.allergens || [];
       const userAllergies = user?.allergies || [];
-      // Intersection: Find items that are in BOTH lists
+      // Find items that are in both lists
       const dangerousMatches = universalDetected.filter((detected) =>
         userAllergies.includes(detected),
       );
@@ -214,13 +224,12 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
 
       const imageUrl = await uploadPromise;
 
-      // 6. Data Sanitization (Preparation for DB)
-      // This is the new step to ensure clean data
+      // Data Sanitization
       const finalData = this.sanitizeScanData({
         userId,
         rawText: sanitizedText,
         novaScore: mlResult.nova_group,
-        nutriScore: analysis.nutriScore, // From LLM now (see Part 4)
+        nutriScore: analysis.nutriScore,
         allergens: universalDetected,
         productName: productName || analysis.productName,
         additives: analysis.additives,
@@ -234,7 +243,7 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         imageUrl,
       });
 
-      // 7. DB Persistence
+      // DB Persistence
       const scan = await withRetry(
         () => this.prisma.productScan.create({ data: finalData }),
         { maxAttempts: 3, initialDelayMs: 500 },
@@ -242,12 +251,14 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         'Database save',
       );
 
-      // 8. Update Cache
-      await this.redisService.setex(
-        cacheKey,
-        CONFIG.CACHE_TTL,
-        JSON.stringify(scan),
-      );
+      this.emitEvent('user.scan_created', {
+        userId,
+        scanId: scan.id,
+        isSafe: scan.isSafe,
+      });
+
+      // Update Cache
+      await this.redisService.set(cacheKey, scan, 3600);
 
       this.logger.log({
         message: 'Scan completed successfully',
@@ -268,8 +279,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
       throw error;
     }
   }
-
-  // --- RETRIEVAL & HISTORY FEATURES (NEW) ---
 
   /**
    * Fetch a single scan by ID, ensuring it belongs to the user.
@@ -300,9 +309,8 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
           id: true,
           productName: true,
           novaScore: true,
-          imageUrl: true, // If we had storage, this would be the URL
+          imageUrl: true,
           createdAt: true,
-          // We don't send the massive recipe/additives list for the summary view
         },
       }),
       this.prisma.productScan.count({ where: { userId } }),
@@ -332,8 +340,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.productScan.delete({ where: { id: scanId } });
     return { success: true, message: 'Scan deleted' };
   }
-
-  // --- HELPER METHODS ---
 
   private async performOcr(
     buffer: Buffer,
@@ -438,13 +444,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  // --- DATA SANITIZATION (NEW) ---
-  /**
-   * Prepares raw data for the database:
-   * 1. Converts to Title Case for display names.
-   * 2. Trims whitespace.
-   * 3. Ensures defaults for optional fields.
-   */
   private sanitizeScanData(data: any) {
     const toTitleCase = (str: string) => {
       if (!str) return '';
@@ -456,10 +455,9 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
 
     return {
       userId: data.userId,
-      rawText: data.rawText?.trim(), // This is the image text for frontend
+      rawText: data.rawText?.trim(),
       novaScore: data.novaScore,
       imageUrl: data.imageUrl || null,
-      // Clean product name
       productName: toTitleCase(data.productName || 'Unknown Product').substring(
         0,
         100,
@@ -479,7 +477,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         ? parseFloat(data.mlConfidence.toFixed(2))
         : null,
 
-      // Categories (ensure array of title-cased strings)
       functionalCategories: Array.isArray(data.functionalCategories)
         ? data.functionalCategories.map((c: string) => toTitleCase(c.trim()))
         : [],
@@ -490,7 +487,6 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  // --- UTILS ---
   private validateInputs(userId: string, imageBuffer: Buffer): void {
     if (!userId) throw new InvalidImageException('Invalid User ID');
     if (!imageBuffer || imageBuffer.length === 0)
@@ -642,5 +638,11 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         details: e.message,
       };
     }
+  }
+
+  private emitEvent(pattern: string, payload: any) {
+    this.amqpConnection
+      .publish('nutrify.events', pattern, payload)
+      .catch((err) => this.logger.error(`Failed to emit ${pattern}`, err));
   }
 }
