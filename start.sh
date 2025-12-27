@@ -1,33 +1,25 @@
 #!/bin/bash
 
-# --- 1. Start Python (Background) ---
-echo "🧠 Starting Python ML Core..."
+# 1. Start Python (Background) - 🔒 PRIVATE MODE
+# Change --host to 127.0.0.1 so it is NOT accessible from outside
+echo "🧠 Starting Python ML Core (Internal Only)..."
 cd /app/python_service
-# We add --reload only for debugging, usually remove in pure prod
-uvicorn src.main:app --host 0.0.0.0 --port 8000 & 
+uvicorn src.main:app --host 127.0.0.1 --port 8000 & 
 
-# Wait for Python to wake up
+# 2. Wait for Python to wake up
 sleep 5
 
-# --- 2. Setup NestJS API ---
+# 3. Setup NestJS API
 cd /app/api
 
 echo "🛠️ Applying Database Migrations..."
-# We try to migrate. If it fails, we print the environment (safely) to debug.
-npx prisma migrate deploy || echo "⚠️ Migration Failed! Is DATABASE_URL set?"
+npx prisma migrate deploy || echo "⚠️ Migration skipped"
 
-# --- 3. Debug & Launch NestJS ---
-echo "🔍 DEBUG: Listing dist folder contents..."
-ls -R dist
+# 4. Start NestJS (Foreground) - 🌍 PUBLIC MODE
+echo "🚀 Starting NestJS API on port 7860..."
 
-echo "🚀 Starting NestJS API..."
-# Try the standard path first, then fallback to src nested path
-if [ -f "dist/main.js" ]; then
-  node dist/main.js
-elif [ -f "dist/src/main.js" ]; then
-  echo "✅ Found main.js in dist/src/"
-  node dist/src/main.js
-else
-  echo "❌ CRITICAL: Could not find main.js in dist/ or dist/src/"
-  exit 1
-fi
+# Force the PORT variable just to be safe
+export PORT=7860
+
+# Use the path that your logs confirmed exists: dist/src/main.js
+node dist/src/main.js
