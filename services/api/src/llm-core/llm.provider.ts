@@ -104,6 +104,13 @@ export class LlmLanguageProvider implements LLMProvider {
     return this.activeProvider.generateShoppingList(prompt);
   }
 
+  async generateText(prompt: string): Promise<string> {
+    if (!this.activeProvider) {
+      throw new Error('LLM provider not initialized.');
+    }
+    return this.activeProvider.generateText(prompt);
+  }
+
   modifyRecipe(
     originalRecipe: string,
     modificationRequest: string,

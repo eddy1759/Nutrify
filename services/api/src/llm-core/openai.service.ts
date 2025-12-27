@@ -202,6 +202,21 @@ IMPORTANT:
     }
   }
 
+  async generateText(prompt: string): Promise<string> {
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7, // Higher temp for more "insightful" creative writing
+      });
+
+      return response.choices[0].message.content || 'No insights available.';
+    } catch (error) {
+      this.logger.error('OpenAI Text Generation Failed:', error.message);
+      return 'Failed to generate AI insights.';
+    }
+  }
+
   parseResponse(text: string): GeminiAnalysis {
     const fallback: GeminiAnalysis = {
       productName: 'Scanned Product',

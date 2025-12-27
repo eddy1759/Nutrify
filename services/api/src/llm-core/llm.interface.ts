@@ -25,4 +25,5 @@ export interface LLMProvider {
 
   // NEW: Shopping list aggregation method
   generateShoppingList(prompt: string): Promise<ShoppingListItem[]>;
+  generateText(prompt: string): Promise<string>;
 }

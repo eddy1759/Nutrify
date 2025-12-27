@@ -206,6 +206,17 @@ export class GeminiService implements LLMProvider {
     }
   }
 
+  async generateText(prompt: string): Promise<string> {
+    try {
+      const result = await this.model.generateContent(prompt);
+      const response = await result.response;
+      return response.text();
+    } catch (error) {
+      this.logger.error('Gemini Text Generation Failed:', error.message);
+      return 'AI Insight service is currently unavailable.';
+    }
+  }
+
   parseResponse(text: string): GeminiAnalysis {
     const fallback: GeminiAnalysis = {
       productName: 'Scanned Product',
