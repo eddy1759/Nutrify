@@ -17,10 +17,11 @@ import {
   verifyAccountDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
-import { EmailService } from '../email/email.service';
+// import { EmailService } from '../email/email.service';
 import { OTPPurpose } from './types/auth.types';
 import { Prisma } from '@prisma/client';
 import { randomInt } from 'crypto';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 
 const ARGON2_OPTIONS: argon.Options = {
   type: argon.argon2id,
@@ -41,7 +42,8 @@ export class AuthService {
     private prisma: PrismaService,
     private config: ConfigService,
     private jwtService: JwtService,
-    private emailService: EmailService,
+    // private emailService: EmailService,
+    private readonly amqpConnection: AmqpConnection,
   ) {
     this.jwtAccessSecret = this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
     this.jwtAccessExpiration = this.config.getOrThrow<string>('JWT_EXPIRATION');
@@ -105,9 +107,16 @@ export class AuthService {
         },
       });
 
-      this.logger.log(`User registered: ${user.id}`);
+      if (this.config.get<string>('NODE_ENV') === 'development') {
+        this.logger.log(`User registered: ${user.id}, otp: ${otp}`);
+      }
 
-      await this.sendVerificationEmail(data.email, otp);
+      // await this.sendVerificationEmail(data.email, otp);
+      await this.amqpConnection.publish('nutrify.events', 'auth.registered', {
+        email: normalizedEmail,
+        name: normalizedUsername,
+        otp,
+      });
 
       return { message: 'User registered. Please check email for OTP.' };
     } catch (error) {
@@ -149,7 +158,11 @@ export class AuthService {
       });
 
       // #TODO: refactor the email sending to use a background job or task
-      await this.emailService.sendWelcomeMail(user.email, user.name);
+      // await this.emailService.sendWelcomeMail(user.email, user.name);
+      await this.amqpConnection.publish('nutrify.events', 'auth.verified', {
+        email: user.email,
+        name: user.name,
+      });
 
       return await this.getTokens(user.id, user.email, user.allergies);
     } catch (error) {
@@ -172,6 +185,10 @@ export class AuthService {
         throw new UnauthorizedException('Invalid Credentials');
 
       this.logger.log(`User logged in: ${user.email}`);
+
+      this.amqpConnection.publish('nutrify.events', 'user.logged_in', {
+        userId: user.id,
+      });
 
       return await this.getTokens(user.id, user.email, user.allergies);
     } catch (error) {
@@ -241,7 +258,15 @@ export class AuthService {
       },
     });
 
-    await this.sendPasswordResetEmail(user.email, otp);
+    // await this.sendPasswordResetEmail(user.email, otp);
+    await this.amqpConnection.publish(
+      'nutrify.events',
+      'auth.forgot_password',
+      {
+        email: user.email,
+        otp,
+      },
+    );
     return { message: 'Reset code sent to email.' };
   }
 
@@ -284,21 +309,21 @@ export class AuthService {
     }
   }
 
-  private async sendVerificationEmail(to: string, otp: string) {
-    this.logger.log(
-      `📧 [MOCK EMAIL] To: ${to} | Subject: Verify Your Account | Body: Your OTP is: ${otp}`,
-    );
+  // private async sendVerificationEmail(to: string, otp: string) {
+  //   this.logger.log(
+  //     `📧 [MOCK EMAIL] To: ${to} | Subject: Verify Your Account | Body: Your OTP is: ${otp}`,
+  //   );
 
-    await this.emailService.sendOtp(to, otp);
-  }
+  //   await this.emailService.sendOtp(to, otp);
+  // }
 
-  private async sendPasswordResetEmail(to: string, otp: string) {
-    this.logger.log(
-      `📧 [MOCK EMAIL] To: ${to} | Subject: Reset Your Password | Body: Your OTP is: ${otp}`,
-    );
+  // private async sendPasswordResetEmail(to: string, otp: string) {
+  //   this.logger.log(
+  //     `📧 [MOCK EMAIL] To: ${to} | Subject: Reset Your Password | Body: Your OTP is: ${otp}`,
+  //   );
 
-    await this.emailService.sendOtp(to, otp);
-  }
+  //   await this.emailService.sendOtp(to, otp);
+  // }
 
   async updateRefreshTokenHash(userId: string, refreshToken: string) {
     try {
