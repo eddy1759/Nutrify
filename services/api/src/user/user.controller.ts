@@ -14,7 +14,7 @@ import {
 import { AtGuard } from '../auth/guard/at.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { UserService } from './user.service';
-import { UpdateUserProfileDto } from './dto/user.dto';
+import { UpdateUserDto } from './dto/user.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('user')
@@ -22,20 +22,20 @@ import { FileInterceptor } from '@nestjs/platform-express';
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
-  @Patch('profile')
-  async updateProfile(
-    @CurrentUser() userId: string,
-    @Body() data: UpdateUserProfileDto,
+  @Patch()
+  async updateMe(
+    @CurrentUser('id') userId: string,
+    @Body() data: UpdateUserDto,
   ) {
-    return this.userService.updateUserProfile(userId, data);
+    return this.userService.updateBasicInfo(userId, data);
   }
 
-  @Get('profile')
-  async getProfile(@CurrentUser() userId: string) {
-    return this.userService.getUserProfile(userId);
+  @Get()
+  async getMe(@CurrentUser('id') userId: string) {
+    return this.userService.getBasicInfo(userId);
   }
 
-  @Patch('profile-image')
+  @Patch('avatar')
   @UseInterceptors(FileInterceptor('image'))
   async uploadProfileImage(
     @CurrentUser('id') userId: string,
