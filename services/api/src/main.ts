@@ -8,7 +8,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
-  const PORT = parseInt(process.env.PORT);
+  const PORT = process.env.PORT || 7860;
   const NODE_ENV = configService.get<string>('NODE_ENV');
 
   app.use(helmet());
@@ -25,9 +25,9 @@ async function bootstrap() {
     defaultVersion: '1',
   });
 
-  await app.listen(PORT);
+  await app.listen(PORT, '0.0.0.0');
   logger.log(`Application is running in ${NODE_ENV} mode`);
-  logger.log(`API Gateway: http://localhost:${PORT}/api/v1`);
+  logger.log(`API Gateway: http://0.0.0.0:${PORT}/api/v1`);
 }
 
 bootstrap().catch((err) => {
