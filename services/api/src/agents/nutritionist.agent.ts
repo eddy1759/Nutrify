@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
-import { PrismaService } from '../common/prisma/prisma.service'; // Assuming you have this
+import { PrismaService } from '../common/prisma/prisma.service';
+import { RedisService } from '../common/redis/redis.service';
 import { NutritionUtils } from './utils/nutrition.utils';
 import {
   AnalysisStatus,
@@ -9,15 +10,21 @@ import {
   MealType,
 } from './types/nutrition.types';
 import { CloudinaryService } from '../common/cloudinary/cloudinary.service';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
+import { createHash } from 'crypto';
+import { startOfDay } from 'date-fns';
 
 @Injectable()
 export class NutritionistAgent {
   private readonly logger = new Logger(NutritionistAgent.name);
+  private readonly CACHE_TTL = 300;
 
   constructor(
     private readonly llm: LlmLanguageProvider,
     private readonly prisma: PrismaService,
     private readonly cloudinary: CloudinaryService,
+    private readonly amqpConnection: AmqpConnection,
+    private readonly redis: RedisService,
   ) {}
 
   async estimateCalories(
@@ -26,92 +33,184 @@ export class NutritionistAgent {
     imageBuffer: Buffer,
     context?: string,
   ): Promise<NutritionResponse> {
-    const uploadPromise = this.cloudinary.uploadImage(imageBuffer, 'meal-logs');
+    // 1. Idempotency Check
+    const imageHash = createHash('sha256').update(imageBuffer).digest('hex');
+    const cacheKey = `meal_est:${userId}:${imageHash}`;
 
-    const prompt = NutritionUtils.generatePrompt(context, mealType);
-    const rawResponse = await this.llm.analyzeImage(imageBuffer, prompt);
-
-    let imageUrl = null;
-    try {
-      const result = await uploadPromise;
-      imageUrl = result.secure_url;
-    } catch (e) {
-      this.logger.warn('Meal image upload failed', e);
+    const cachedResult = await this.redis.get<NutritionResponse>(cacheKey);
+    if (cachedResult) {
+      this.logger.log(`Returning cached estimation for user ${userId}`);
+      return cachedResult;
     }
 
-    let analysis = rawResponse.foodName
-      ? (rawResponse as CalorieAnalysisResult)
-      : NutritionUtils.parseResponse(JSON.stringify(rawResponse));
+    // 2. Start Upload & LLM Analysis in Parallel
+    // Note: We don't await them yet, we just start them.
+    const uploadPromise = this.cloudinary.uploadImage(imageBuffer, 'meal-logs');
+    const analysisPromise = this.llm.analyzeImage(
+      imageBuffer,
+      NutritionUtils.generatePrompt(context, mealType),
+    );
 
-    if (!analysis) {
-      this.logger.warn('LLM Parsing failed, using fallback.');
+    // 3. Wait for both to settle (finish or fail)
+    const [uploadResult, rawResponse] = await Promise.allSettled([
+      uploadPromise,
+      analysisPromise,
+    ]);
+
+    // --- Handling Upload Result ---
+    let imageUrl: string | null = null;
+    if (uploadResult.status === 'fulfilled') {
+      imageUrl = uploadResult.value.secure_url; // Access .value here
+    } else {
+      this.logger.warn('Meal image upload failed', uploadResult.reason); // Access .reason here
+    }
+
+    // --- Handling Analysis Result ---
+    let analysis: CalorieAnalysisResult;
+
+    // ⚠️ FIX: Check 'rawResponse.status', not 'analysisPromise.status'
+    if (rawResponse.status === 'fulfilled') {
+      const llmData = rawResponse.value; // ⚠️ FIX: Unwrap the value first
+
+      analysis = llmData.foodName
+        ? (llmData as CalorieAnalysisResult)
+        : NutritionUtils.parseResponse(JSON.stringify(llmData));
+    } else {
+      // ⚠️ FIX: Access .reason on the result object
+      this.logger.warn('LLM Analysis failed', rawResponse.reason);
       analysis = NutritionUtils.getFallback(context || 'food');
     }
-    const analysisWithImage = {
-      ...rawResponse,
-      imageUrl: imageUrl, // Attach it here
-    };
-    return this.applyConfidenceLogic(
-      userId,
-      analysisWithImage,
-      mealType,
-      imageBuffer,
-    );
-  }
 
-  private async applyConfidenceLogic(
-    userId: string,
-    analysis: any,
-    mealType: MealType,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    _imageBuffer: Buffer,
-  ): Promise<NutritionResponse> {
-    const { confidence } = analysis;
+    // 4. Prepare Response Data
+    const fullAnalysis = { ...analysis, imageUrl };
+    const { confidence } = fullAnalysis;
 
-    // High Confidence (> 0.9) -> Auto Log
-    if (confidence >= 0.9) {
-      const log = await this.logToDatabase(userId, analysis, mealType);
-      return {
-        status: AnalysisStatus.AUTO_LOGGED,
-        data: analysis,
-        logId: log.id,
+    let response: NutritionResponse;
+
+    if (confidence >= 0.85) {
+      response = {
+        status: AnalysisStatus.CONFIRMED,
+        data: fullAnalysis,
         warningMessage: undefined,
       };
-    }
-
-    // Low Confidence (< 0.7) -> Warn User
-    if (confidence < 0.7) {
-      return {
+    } else if (confidence < 0.65) {
+      response = {
         status: AnalysisStatus.REQUIRES_REVIEW,
-        data: analysis,
-        warningMessage: `We aren't 100% sure. Is this ${analysis.foodName}? (Tap to Edit)`,
+        data: fullAnalysis,
+        warningMessage: `We aren't 100% sure. Is this ${analysis.foodName}?`,
+      };
+    } else {
+      response = {
+        status: AnalysisStatus.CONFIRMED,
+        data: fullAnalysis,
       };
     }
 
-    // Middle Ground (0.7 - 0.9) -> Standard Flow (User confirms in UI)
-    return {
-      status: AnalysisStatus.CONFIRMED,
-      data: analysis,
-    };
+    // 5. Cache the result
+    const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    await this.redis.set(
+      `pending_log:${userId}:${tempId}`,
+      { ...fullAnalysis, mealType },
+      this.CACHE_TTL,
+    );
+
+    await this.redis.set(
+      cacheKey,
+      { ...response, logId: tempId },
+      this.CACHE_TTL,
+    );
+
+    return { ...response, logId: tempId };
   }
 
-  async logToDatabase(
+  async confirmMealLog(
     userId: string,
-    data: CalorieAnalysisResult & { imageUrl?: string },
-    mealType: MealType,
+    tempLogId: string,
+    overrides?: Partial<CalorieAnalysisResult>,
   ) {
-    return this.prisma.nutritionLog.create({
-      data: {
-        userId,
-        foodName: data.foodName,
-        calories: data.macros.calories,
-        protein: data.macros.protein,
-        carbs: data.macros.carbs,
-        fat: data.macros.fat,
-        mealType: mealType || 'Snack',
-        imageUrl: data.imageUrl || null,
-      },
+    const cacheKey = `pending_log:${userId}:${tempLogId}`;
+    const cachedData = await this.redis.get<any>(cacheKey);
+
+    if (!cachedData) {
+      // It might have already been confirmed (idempotency) or expired
+      // Check if it was already logged to prevent double-click issues
+      const processedKey = `processed_log:${userId}:${tempLogId}`;
+      const existingLogId = await this.redis.get<string>(processedKey);
+
+      if (existingLogId) {
+        return this.prisma.nutritionLog.findUnique({
+          where: { id: existingLogId },
+        });
+      }
+
+      throw new NotFoundException(
+        'Meal estimation expired or invalid. Please scan again.',
+      );
+    }
+
+    // Merge overrides (if user edited the name/calories)
+    const finalData = { ...cachedData, ...overrides };
+    const calories = Math.round(
+      finalData.macros?.calories || finalData.calories || 0,
+    );
+    const protein = Math.round(
+      finalData.macros?.protein || finalData.protein || 0,
+    );
+    const carbs = Math.round(finalData.macros?.carbs || finalData.carbs || 0);
+    const fat = Math.round(finalData.macros?.fat || finalData.fat || 0);
+    const today = startOfDay(new Date());
+
+    // 1. Write to DB
+    const log = await this.prisma.$transaction(async (tx) => {
+      const newLog = await this.prisma.nutritionLog.create({
+        data: {
+          userId,
+          foodName: finalData.foodName,
+          calories,
+          protein,
+          carbs,
+          fat,
+          mealType: finalData.mealType || 'Snack',
+          imageUrl: finalData.imageUrl || null,
+        },
+      });
+
+      await tx.dailyLog.upsert({
+        where: {
+          userId_date: { userId, date: today },
+        },
+        create: {
+          userId,
+          date: today,
+          caloriesIn: calories,
+        },
+        update: {
+          caloriesIn: { increment: calories }, // Add to existing total
+        },
+      });
+      return newLog;
     });
+
+    // 2. Publish Event
+    this.amqpConnection
+      .publish('nutrify.events', 'user.meal_logged', {
+        userId,
+        mealType: log.mealType,
+        calories: log.calories,
+        isHealthy: this.isHealthyChoice(log),
+      })
+      .catch((e) => this.logger.error('Failed to emit meal event', e));
+
+    // 3. Cleanup & Mark as Processed
+    await this.redis.del(cacheKey); // Remove pending data
+    await this.redis.set(`processed_log:${userId}:${tempLogId}`, log.id, 3600); // Mark ID as used for 1hr
+
+    return log;
+  }
+
+  private isHealthyChoice(macros: any): boolean {
+    return macros.protein > 10 && macros.fat < 20;
   }
 
   async getDailyCalorySummary(userId: string, dateString: string) {
@@ -119,7 +218,7 @@ export class NutritionistAgent {
     const start = new Date(date.setHours(0, 0, 0, 0));
     const end = new Date(date.setHours(23, 59, 59, 999));
 
-    // 1. Efficient DB Aggregation
+    // Efficient DB Aggregation
     const aggregations = await this.prisma.nutritionLog.aggregate({
       _sum: {
         calories: true,
@@ -133,7 +232,7 @@ export class NutritionistAgent {
       },
     });
 
-    // 2. Fetch list only for display
+    // Fetch list only for display
     const logs = await this.prisma.nutritionLog.findMany({
       where: { userId, createdAt: { gte: start, lte: end } },
       orderBy: { createdAt: 'desc' },
