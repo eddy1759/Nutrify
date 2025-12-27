@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaService } from 'src/common/prisma/prisma.service';
-import { UpdateUserProfileDto } from './dto/user.dto';
+import { PrismaService } from '../common/prisma/prisma.service';
+import { UpdateUserDto } from './dto/user.dto';
 import { CloudinaryService } from '../common/cloudinary/cloudinary.service';
 
 @Injectable()
@@ -12,36 +12,38 @@ export class UserService {
     private readonly cloudinary: CloudinaryService,
   ) {}
 
-  async updateUserProfile(userId: string, data: UpdateUserProfileDto) {
-    let cleanAllergies;
-    let cleanedName;
-
-    if (data.allergies) {
-      cleanAllergies = data.allergies.map(
-        (a) =>
-          a.trim().charAt(0).toUpperCase() +
-          a.trim().slice(1).toLocaleLowerCase(),
-      );
-    }
+  async updateBasicInfo(userId: string, data: UpdateUserDto) {
+    const updates: any = {};
 
     if (data.name) {
-      cleanedName = data.name.trim().toLowerCase();
+      updates.name = data.name.trim();
+    }
+
+    if (data.allergies) {
+      // Standardize formatting: "peanut" -> "Peanut"
+      updates.allergies = data.allergies.map(
+        (a) =>
+          a.trim().charAt(0).toUpperCase() + a.trim().slice(1).toLowerCase(),
+      );
     }
 
     return this.prisma.user.update({
       where: { id: userId },
-      data: {
-        name: cleanedName,
-        allergies: cleanAllergies,
-      },
-      select: { id: true, allergies: true },
+      data: updates,
+      select: { id: true, name: true, allergies: true },
     });
   }
 
-  async getUserProfile(userId: string) {
+  async getBasicInfo(userId: string) {
     return this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, name: true, email: true, allergies: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        profileImage: true,
+        allergies: true,
+      },
     });
   }
 
@@ -49,10 +51,10 @@ export class UserService {
     // 1. Upload to Cloudinary
     const result = await this.cloudinary.uploadImage(file, 'nutrify-profiles');
 
-    // 2. Save URL to DB
+    // 2. Save secure URL to DB
     return this.prisma.user.update({
       where: { id: userId },
-      data: { profileImage: result.secure_url }, // Use secure_url (https)
+      data: { profileImage: result.secure_url },
       select: { id: true, profileImage: true },
     });
   }
