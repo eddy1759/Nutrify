@@ -84,7 +84,7 @@ export const NutritionUtils = {
 
   parseResponse(text: string): CalorieAnalysisResult | null {
     try {
-      // 1. Sanitize Markdown wrappers
+      // Sanitize Markdown wrappers
       let jsonString = text.trim();
 
       // Remove markdown code blocks if present
@@ -111,8 +111,6 @@ export const NutritionUtils = {
 
       const parsed = JSON.parse(jsonString);
 
-      // 3. Fix Data Types (Self-Healing)
-      // If LLM returns "35g", strip the 'g' and cast to number
       ['calories', 'protein', 'carbs', 'fat'].forEach((key) => {
         if (parsed.macros && typeof parsed.macros[key] === 'string') {
           parsed.macros[key] = parseFloat(
