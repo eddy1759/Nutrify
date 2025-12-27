@@ -1,10 +1,12 @@
-title: Resume Ranker Api
-emoji: 🏢
-colorFrom: blue
-colorTo: red
+---
+title: Nutrify Backend
+emoji: 🥑
+colorFrom: green
+colorTo: blue
 sdk: docker
 pinned: false
-license: mit
+app_port: 7860
+---
 
 <!-- ================================================= -->
 <!--                 NUTRIFY README                    -->
