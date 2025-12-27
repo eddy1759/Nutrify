@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c7b8d9e0-1f2a-4b3c-9d8e-5f6g7h8i9j0k",
     "name": "NutrifyAI Platform API",
-    "description": "# NutrifyAI Backend API\n\nThis collection covers the full lifecycle of the NutrifyAI platform, including:\n\n* **Authentication:** JWT handling, OTP verification, and secure password resets.\n* **Core Scanning:** Tesseract OCR + Python BERT classification pipeline.\n* **AI Agents:** Nutrition analysis, Meal planning (LLM), and Recipe generation.\n\n## Setup\n\n1.  Ensure your NestJS server is running at `{{baseUrl}}`.\n2.  Register a new user or use the **Login** endpoint to start.\n3.  Tokens are **automatically saved** to your environment variables upon successful login.",
+    "description": "# NutrifyAI Backend API\n\nThis collection covers the full lifecycle of the NutrifyAI platform.\n\n## New Modules Added:\n* **User & Biometrics:** Profile management, avatar upload, BMR/TDEE calculation.\n* **Tracking:** Daily water and weight logging.\n* **Gamification:** XP, Badges, Leaderboards, and Streak logic.\n* **Notifications:** Push token registration and history.\n\n## Setup\n1. Ensure server is running at `{{baseUrl}}`.\n2. Login to automatically save tokens.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -25,10 +25,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/register",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "register"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
             },
-            "description": "Registers a new user. Triggers an email with a 6-digit OTP.\n\n**Next Step:** Check your server logs (or email) for the OTP and use it in the \"Verify OTP\" request."
+            "description": "Registers a new user. Triggers an email with a 6-digit OTP."
           },
           "response": []
         },
@@ -64,10 +69,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/verify-otp",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "verify-otp"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "verify-otp"
+              ]
             },
-            "description": "Verifies the email address. \n\n**Auto-Script:** On success, this automatically saves the `accessToken` and `refreshToken` to your environment."
+            "description": "Verifies the email address. Automatically saves tokens."
           },
           "response": []
         },
@@ -103,10 +113,15 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "login"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
             },
-            "description": "Standard login.\n\n**Auto-Script:** Updates your `accessToken` automatically."
+            "description": "Standard login."
           },
           "response": []
         },
@@ -142,10 +157,14 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/auth/refresh",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "refresh"]
-            },
-            "description": "Uses the long-lived `refreshToken` to get a fresh `accessToken` without logging in again."
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            }
           },
           "response": []
         },
@@ -165,10 +184,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/forgot-password",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "forgot-password"]
-            },
-            "description": "Initiates the password reset flow. Sends an OTP email."
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "forgot-password"
+              ]
+            }
           },
           "response": []
         },
@@ -188,10 +211,14 @@
             },
             "url": {
               "raw": "{{baseUrl}}/auth/reset-password",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "reset-password"]
-            },
-            "description": "Completes the password reset using the OTP."
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "reset-password"
+              ]
+            }
           },
           "response": []
         },
@@ -212,15 +239,473 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/auth/logout",
-              "host": ["{{baseUrl}}"],
-              "path": ["auth", "logout"]
-            },
-            "description": "Invalidates the refresh token on the server."
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
           },
           "response": []
         }
       ],
       "description": "Handles User Registration, Login, and Security."
+    },
+    {
+      "name": "👤 User & Biometrics",
+      "item": [
+        {
+          "name": "Create Biometric Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"gender\": \"male\",\n    \"dateOfBirth\": \"1995-05-15\",\n    \"heightCm\": 180,\n    \"currentWeight\": 75,\n    \"activityLevel\": \"moderately_active\",\n    \"goal\": \"maintain\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/biometrics/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "biometrics",
+                "profile"
+              ]
+            },
+            "description": "Sets up the user's physical stats. This triggers BMR/TDEE calculation and grants the 'Profile Complete' badge."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Biometric Profile",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/biometrics/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "biometrics",
+                "profile"
+              ]
+            },
+            "description": "Returns decrypted profile data including calculated BMR and TDEE."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Basic User Info",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/user",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user"
+              ]
+            },
+            "description": "Fetches non-sensitive user data (Name, Email, Allergies, Avatar URL)."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Basic Info",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Updated Name\",\n    \"allergies\": [\"Peanuts\", \"Shellfish\"]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/user",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Avatar",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "description": "Select a profile picture"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/user/avatar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user",
+                "avatar"
+              ]
+            },
+            "description": "Uploads to Cloudinary and updates user profile image URL."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "📊 Daily Tracking",
+      "item": [
+        {
+          "name": "Log Water",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"amount\": 250\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tracking/water",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tracking",
+                "water"
+              ]
+            },
+            "description": "Logs water intake in ML. Checks for Hydration badges via events."
+          },
+          "response": []
+        },
+        {
+          "name": "Log Weight",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"weight\": 74.5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tracking/weight",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tracking",
+                "weight"
+              ]
+            },
+            "description": "Logs daily weight. Updates Biometrics profile and recalculates TDEE."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Daily Summary",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tracking/today",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tracking",
+                "today"
+              ]
+            },
+            "description": "Returns water, calories, and weight logged for the current day."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "🎮 Gamification",
+      "item": [
+        {
+          "name": "Get User Stats",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/gamification/stats",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "gamification",
+                "stats"
+              ]
+            },
+            "description": "Returns Level, XP, Progress, and Earned Badges."
+          },
+          "response": []
+        },
+        {
+          "name": "Trigger Daily Login",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/gamification/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "gamification",
+                "login"
+              ]
+            },
+            "description": "Call this when the app opens to process streaks and 'Early Bird'/'Night Owl' badges."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Global Leaderboard",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/gamification/leaderboard?limit=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "gamification",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                }
+              ]
+            },
+            "description": "Fetches top users sorted by Level/XP. Caches results in Redis for 5 minutes."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "🔔 Notifications",
+      "item": [
+        {
+          "name": "Get Notification History",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/notifications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications"
+              ]
+            },
+            "description": "Returns list of in-app notifications (Level ups, Badges, etc)."
+          },
+          "response": []
+        },
+        {
+          "name": "Register Push Token",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"token\": \"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/notifications/register-token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "register-token"
+              ]
+            },
+            "description": "Saves an Expo Push Token to the user profile securely."
+          },
+          "response": []
+        }
+      ]
     },
     {
       "name": "📸 Core Scanning",
@@ -263,8 +748,13 @@
             },
             "url": {
               "raw": "{{baseUrl}}/scan/analyze",
-              "host": ["{{baseUrl}}"],
-              "path": ["scan", "analyze"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scan",
+                "analyze"
+              ]
             },
             "description": "The heart of the application. \n1. Uploads an image.\n2. OCR extracts text.\n3. ML classifies processing level.\n4. LLM extracts additives and allergens.\n\n**Note:** You must manually select a file in the Body -> Form-data tab."
           },
@@ -287,8 +777,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/scan/history?limit=10&page=1",
-              "host": ["{{baseUrl}}"],
-              "path": ["scan", "history"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scan",
+                "history"
+              ],
               "query": [
                 {
                   "key": "limit",
@@ -321,8 +816,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/scan/:id",
-              "host": ["{{baseUrl}}"],
-              "path": ["scan", ":id"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scan",
+                ":id"
+              ],
               "variable": [
                 {
                   "key": "id",
@@ -341,8 +841,13 @@
             "header": [],
             "url": {
               "raw": "{{baseUrl}}/scan/health",
-              "host": ["{{baseUrl}}"],
-              "path": ["scan", "health"]
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "scan",
+                "health"
+              ]
             },
             "description": "Checks connectivity to Postgres, Redis, Python ML Service, and LLM Provider."
           },
@@ -394,8 +899,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/calories/analyze",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "calories", "analyze"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "calories",
+                    "analyze"
+                  ]
                 },
                 "description": "Estimates calories from a photo. \nReturns `AUTO_LOGGED` if confidence is high, or `REQUIRES_REVIEW` if low."
               },
@@ -427,8 +938,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/calories/confirm",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "calories", "confirm"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "calories",
+                    "confirm"
+                  ]
                 },
                 "description": "Manually saves a log entry (used when AI confidence was low)."
               },
@@ -451,8 +968,14 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/agents/calories/summary?date=2023-12-01",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "calories", "summary"],
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "calories",
+                    "summary"
+                  ],
                   "query": [
                     {
                       "key": "date",
@@ -495,8 +1018,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/planner/generate",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "planner", "generate"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "planner",
+                    "generate"
+                  ]
                 },
                 "description": "Uses LLM to create a 7-day meal plan based on user allergies (from profile) and preferences."
               },
@@ -519,8 +1048,14 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/agents/planner/latest",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "planner", "latest"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "planner",
+                    "latest"
+                  ]
                 }
               },
               "response": []
@@ -542,8 +1077,15 @@
                 "header": [],
                 "url": {
                   "raw": "{{baseUrl}}/agents/planner/:planId/shopping-list",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "planner", ":planId", "shopping-list"],
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "planner",
+                    ":planId",
+                    "shopping-list"
+                  ],
                   "variable": [
                     {
                       "key": "planId",
@@ -585,8 +1127,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/recipes/suggest",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "recipes", "suggest"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "recipes",
+                    "suggest"
+                  ]
                 },
                 "description": "\"Fridge Mode\" - Suggests recipes based on what you have."
               },
@@ -618,8 +1166,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/recipes/modify",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "recipes", "modify"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "recipes",
+                    "modify"
+                  ]
                 }
               },
               "response": []
@@ -650,8 +1204,14 @@
                 },
                 "url": {
                   "raw": "{{baseUrl}}/agents/recipes/save",
-                  "host": ["{{baseUrl}}"],
-                  "path": ["agents", "recipes", "save"]
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "agents",
+                    "recipes",
+                    "save"
+                  ]
                 },
                 "description": "Saves a generated recipe to the user's cookbook."
               },
@@ -665,7 +1225,7 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:3000",
+      "value": "http://localhost:3000/api/v1",
       "type": "string"
     },
     {
