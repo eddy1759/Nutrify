@@ -1,0 +1,12 @@
+services/ml-core/.venv
+services/ml-core/__pycache__
+services/ml-core/.ipynb_checkpoints
+services/ml-core/*.pyc
+.git
+.env
+services/ml-core/data/
+services/ml-core/notebooks/
+services/api/node_modules
+services/api/dist
+services/api/npm-debug.log
+.DS_Store
