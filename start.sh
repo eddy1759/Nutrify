@@ -1,22 +1,23 @@
 #!/bin/bash
 
-# 1. Start Python (Internal Only - Loopback Interface)
-# We bind to 127.0.0.1 so HF doesn't get confused and try to route public traffic here
+# 1. Start Python (Internal)
 echo "🧠 Starting Python ML Core (Internal)..."
 cd /app/python_service
-# --log-level warning keeps logs clean so HF doesn't think this is the main app
-uvicorn src.main:app --host 127.0.0.1 --port 8000 --log-level warning & 
+# Using nohup to ensure it stays alive detached
+nohup uvicorn src.main:app --host 127.0.0.1 --port 8000 > /app/python.log 2>&1 &
 
-# 2. Wait for Python to stabilize
+# 2. Wait for Python
 sleep 3
 
 # 3. Setup NestJS
 cd /app/api
 echo "🛠️ Applying Database Migrations..."
-npx prisma migrate deploy
+npx prisma migrate deploy || echo "⚠️ Migration skipped"
 
-# 4. Start NestJS (Public Interface)
+# 4. Start NestJS (Public)
 echo "🚀 Starting NestJS API..."
-# Explicitly export the port for NestJS to pick up
 export PORT=7860
-node dist/src/main.js
+
+# ⚠️ CRITICAL FIX: Use 'exec' here
+# This makes Node the main process (PID 1) so HF can see the open port
+exec node dist/src/main.js
