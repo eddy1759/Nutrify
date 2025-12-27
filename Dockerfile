@@ -79,6 +79,7 @@ COPY --from=nest-builder /app/tessdata ./tessdata
 # Set Environment Variables
 ENV NODE_ENV=production
 ENV PORT=7860
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # Internal Communication URL
 ENV ML_SERVICE_URL=http://127.0.0.1:8000
 
