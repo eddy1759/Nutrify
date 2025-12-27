@@ -1,12 +1,16 @@
-import { IsString, IsOptional, Min } from 'class-validator';
+import { IsString, IsOptional, IsArray } from 'class-validator';
 
-export class UpdateUserProfileDto {
+export class UpdateUserDto {
   @IsString()
-  @Min(3)
   @IsOptional()
   name?: string;
 
   @IsString()
+  @IsOptional()
+  username?: string;
+
+  @IsArray()
+  @IsString({ each: true })
   @IsOptional()
   allergies?: string[];
 }
