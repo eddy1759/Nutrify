@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
 import * as nodemailer from 'nodemailer';
 
 @Injectable()
@@ -10,11 +11,11 @@ export class EmailService {
   constructor(private readonly configService: ConfigService) {
     const transportOpts = {
       host: this.configService.getOrThrow<string>('SMTP_HOST'),
-      port: this.configService.getOrThrow<number>('SMTP_PORT'), // Removed default to enforce env var
-      secure: this.configService.get<boolean>('SMTP_SECURE', false), // Usually false for 587 (TLS)
+      port: this.configService.getOrThrow<number>('SMTP_PORT'),
+      secure: this.configService.get<boolean>('SMTP_SECURE', false),
       auth: {
         user: this.configService.getOrThrow<string>('SMTP_USER'),
-        pass: this.configService.getOrThrow<string>('SMTP_PASS'), // Ensure this matches your .env
+        pass: this.configService.getOrThrow<string>('SMTP_PASS'),
       },
     };
 
@@ -28,10 +29,45 @@ export class EmailService {
       );
   }
 
-  /**
-   * Core method to send emails via Nodemailer
-   */
-  async sendEmail(to: string, subject: string, html: string): Promise<void> {
+  @RabbitSubscribe({
+    exchange: 'nutrify.events',
+    routingKey: 'auth.registered',
+    queue: 'email.auth.otp',
+  })
+  async handleRegistrationEmail(payload: {
+    email: string;
+    name: string;
+    otp: string;
+  }) {
+    this.logger.log(`📨 Processing Registration OTP for: ${payload.email}`);
+    await this.sendOtp(payload.email, payload.otp);
+  }
+
+  @RabbitSubscribe({
+    exchange: 'nutrify.events',
+    routingKey: 'auth.forgot_password',
+    queue: 'email.auth.reset',
+  })
+  async handleForgotPassEmail(payload: { email: string; otp: string }) {
+    this.logger.log(`📨 Processing Password Reset OTP for: ${payload.email}`);
+    await this.sendOtp(payload.email, payload.otp);
+  }
+
+  @RabbitSubscribe({
+    exchange: 'nutrify.events',
+    routingKey: 'auth.verified',
+    queue: 'email.auth.welcome',
+  })
+  async handleWelcomeEmail(payload: { email: string; name: string }) {
+    this.logger.log(`📨 Processing Welcome Email for: ${payload.email}`);
+    await this.sendWelcomeMail(payload.email, payload.name);
+  }
+
+  private async sendEmail(
+    to: string,
+    subject: string,
+    html: string,
+  ): Promise<void> {
     const mailOpts = {
       from: `"NutrifyAI Support" <${this.configService.get('SMTP_USER')}>`,
       to,
@@ -41,18 +77,19 @@ export class EmailService {
 
     try {
       const info = await this.transporter.sendMail(mailOpts);
-      this.logger.log(`Email sent to ${to}: ${info.messageId}`);
+      this.logger.log(`✅ Email sent to ${to}: ${info.messageId}`);
     } catch (error) {
-      this.logger.error(`Failed to send email to ${to}:`, error);
-      // In production, you might want to throw this so the caller knows it failed
-      // throw new InternalServerErrorException('Email delivery failed');
+      this.logger.error(`❌ Failed to send email to ${to}:`, error);
+      // In RabbitMQ, if we throw here, the message will be NACKed and retried.
+      // This is good for transient errors (network), but bad for persistent ones (bad email).
+      // For now, we log only to avoid infinite loops on bad emails.
     }
   }
 
   /**
    * Sends a One-Time Password (OTP)
    */
-  async sendOtp(to: string, otp: string) {
+  private async sendOtp(to: string, otp: string) {
     const subject = 'Your NutrifyAI Security Code';
     const html = `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; background-color: #ffffff;">
@@ -74,27 +111,21 @@ export class EmailService {
   /**
    * Sends a professional Welcome Email
    */
-  async sendWelcomeMail(to: string, name: string) {
+  private async sendWelcomeMail(to: string, name: string) {
     const subject = 'Welcome to NutrifyAI! 🌱';
     const loginUrl =
       this.configService.get<string>('FRONTEND_URL') || 'https://nutrify.ai';
 
     const html = `
         <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px;">
-          
           <div style="text-align: center; padding-bottom: 20px; border-bottom: 1px solid #eeeeee;">
              <h1 style="color: #2c3e50; margin: 0; font-size: 24px;">NutrifyAI</h1>
           </div>
-
           <div style="padding: 30px 0;">
             <h2 style="color: #34495e; font-size: 22px; margin-top: 0;">Hello, ${name}!</h2>
             <p style="color: #555; font-size: 16px; line-height: 1.6;">
                Welcome to the future of nutrition. We are thrilled to have you join our community of health enthusiasts.
             </p>
-            <p style="color: #555; font-size: 16px; line-height: 1.6;">
-               With NutrifyAI, you can now:
-            </p>
-            
             <div style="background-color: #f0f7f4; padding: 20px; border-radius: 8px; margin: 20px 0;">
                <ul style="color: #2c3e50; padding-left: 20px; margin: 0; font-size: 15px; line-height: 1.8;">
                  <li>📸 <strong>Scan Meals:</strong> Get instant calorie & macro estimates.</li>
@@ -102,17 +133,13 @@ export class EmailService {
                  <li>⚠️ <strong>Stay Safe:</strong> Automatic allergen alerts.</li>
                </ul>
             </div>
-
             <p style="color: #555; font-size: 16px;">Ready to log your first meal?</p>
-
             <div style="text-align: center; margin-top: 30px; margin-bottom: 20px;">
               <a href="${loginUrl}" style="background-color: #27ae60; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px; display: inline-block;">Get Started</a>
             </div>
           </div>
-
           <div style="text-align: center; padding-top: 20px; border-top: 1px solid #eeeeee; font-size: 12px; color: #aaa;">
             <p>&copy; ${new Date().getFullYear()} NutrifyAI. All rights reserved.</p>
-            <p>123 Health St, Tech City</p>
           </div>
         </div>
     `;
