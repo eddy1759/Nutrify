@@ -1,3 +1,11 @@
+title: Resume Ranker Api
+emoji: 🏢
+colorFrom: blue
+colorTo: red
+sdk: docker
+pinned: false
+license: mit
+
 <!-- ================================================= -->
 <!--                 NUTRIFY README                    -->
 <!--   AI Nutrition • Food Label Scanner • NOVA AI     -->
