@@ -14,31 +14,131 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  name      String
-  profileImage String?
-
-  isVerified Boolean  @default(false)
-  otpCode           String?   // The 6-digit code
-  otpExpiresAt      DateTime? // Code validity (e.g., 2 mins)
-  otpPurpose  String?
+  id                 String   @id @default(uuid())
+  email              String   @unique
+  password           String
+  name               String
   
-  resetToken  String?
-  resetTokenExpiry DateTime?
-
+  // Auth & Security
+  isVerified         Boolean  @default(false)
+  otpCode            String?
+  otpExpiresAt       DateTime?
+  otpPurpose         String?
+  resetToken         String?
+  resetTokenExpiry   DateTime?
   hashedRefreshToken String?
-  allergies  String[]
+  enCryptedPushToken String?
+
+  // Profile Data
+  profileImage       String?
+  allergies          String[]
+
+  // Gamification & Stats
+  xp                 Int      @default(0)
+  level              Int      @default(1)
+  totalLogins        Int      @default(0)
+  lastLoginDate      DateTime?
+  currentLoginStreak Int      @default(0)
+  longestLoginStreak Int      @default(0)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  profile       UserProfile?
+  dailyLogs     DailyLog[]
+  notifications Notification[]
+  badges        UserBadge[]
+  scans         ProductScan[]
+  mealPlans     MealPlan[]
+  nutritionLogs NutritionLog[]
+  savedRecipes  SavedRecipe[]
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id])
+
+  // Encrypted Biometrics (Must be Strings to hold cipher text)
+  encryptedGender        String
+  encryptedDateOfBirth   String // Storing ISO string encrypted
+  encryptedHeightCm      String 
+  encryptedCurrentWeight String 
+  
+  activityLevel String   // Enum: 'sedentary', 'active', etc.
+  goal          String   // Enum: 'cut', 'bulk', 'maintain'
+
+  // Calculated Metrics (Visible)
+  bmr           Int      
+  tdee          Int      
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model DailyLog {
+  id  String  @id @default(uuid())
+  userId  String
+  user  User  @relation(fields: [userId], references: [id])
+
+  date  DateTime  @default(now()) //YYYY-MM-DD
+
+  waterMl Int @default(0)
+  weightKg  Float?
+  caloriesIn  Int      @default(0)
+
+  cleanStreak Int @default(0)
+  didLogin    Boolean @default(false)
+
+  @@unique([userId, date])
+  @@index([date])
+}
+
+model Notification {
+  id  String  @id @default(uuid())
+  userId  String
+  user  User  @relation(fields: [userId], references: [id])
+
+  title String
+  body  String
+  type  String   // 'STREAK', 'ALERT', 'SYSTEM'
+
+  data  Json
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  scans     ProductScan[]
-  mealPlans MealPlan[]
-  nutritionLogs NutritionLog[]
-  savedRecipes SavedRecipe[]
 }
+
+model Badge {
+  id  String  @id @default(uuid())
+  code  String  @unique  //'hydration_master_1'
+  name  String
+  description String
+  category    String      // 'HYDRATION', 'STREAK', 'SCAN', 'LOGIN', 'SPECIAL'
+  tier        Int         @default(1) // 1: Bronze, 2: Silver, 3: Gold, 4: Platinum
+  imageUrl  String
+  xpReward  Int
+  requirement Int         // Threshold value (e.g., 7 for 7-day streak)
+
+  users UserBadge[]
+
+  @@index([category])
+  @@index([tier])
+}
+
+model UserBadge {
+  userId    String
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId   String
+  badge     Badge   @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  
+  earnedAt  DateTime @default(now())
+  progress  Int      @default(0) // Track progress towards next tier
+  
+  @@id([userId, badgeId])
+  @@index([earnedAt])
+}
+
 
 model ProductScan {
   id          String   @id @default(uuid())
