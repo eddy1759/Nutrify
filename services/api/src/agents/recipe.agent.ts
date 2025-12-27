@@ -7,6 +7,7 @@ import {
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { Recipe } from './types/nutrition.types';
+import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 
 @Injectable()
 export class RecipeAgent {
@@ -15,6 +16,7 @@ export class RecipeAgent {
   constructor(
     private readonly llm: LlmLanguageProvider,
     private readonly prisma: PrismaService,
+    private readonly amqpConnection: AmqpConnection,
   ) {}
 
   async suggestRecipes(
@@ -50,7 +52,13 @@ export class RecipeAgent {
           data: recipe as any,
         },
       });
-      this.logger.log('Recipe saved to db');
+      this.amqpConnection
+        .publish('nutrify.events', 'user.recipe_saved', {
+          userId,
+          recipeName: recipe.recipeName,
+        })
+        .catch((e) => this.logger.error('Failed to emit recipe event', e));
+
       return { success: true, message: 'Recipe saved to cookbook' };
     } catch (error) {
       this.logger.error('An error occurred while saving recipe to db', error);
