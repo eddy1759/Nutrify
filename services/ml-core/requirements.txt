@@ -8,4 +8,5 @@ duckdb==1.4.2
 pydantic==2.12.5
 requests==2.32.5
 onnxruntime
+torch --index-url https://download.pytorch.org/whl/cpu
 transformers
