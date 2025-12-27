@@ -31,19 +31,18 @@ export const CalorieAnalysisSchema = z.object({
 export type CalorieAnalysisResult = z.infer<typeof CalorieAnalysisSchema>;
 export type MacroNutrients = z.infer<typeof MacroSchema>;
 
-// --- API Response Enums ---
 
 export enum AnalysisStatus {
-  AUTO_LOGGED = 'AUTO_LOGGED', // Confidence > 0.9
-  REQUIRES_REVIEW = 'REQUIRES_REVIEW', // Confidence < 0.7
-  CONFIRMED = 'CONFIRMED', // Middle ground (0.7 - 0.9)
+  AUTO_LOGGED = 'AUTO_LOGGED',
+  REQUIRES_REVIEW = 'REQUIRES_REVIEW',
+  CONFIRMED = 'CONFIRMED',
 }
 
 export interface NutritionResponse {
   status: AnalysisStatus;
   data: CalorieAnalysisResult;
-  logId?: string; // Present if auto-logged (for Undo functionality)
-  warningMessage?: string; // Present if confidence is low
+  logId?: string;
+  warningMessage?: string;
 }
 
 export interface MicroNutrients {
@@ -100,18 +99,6 @@ export interface DailyMealPlan {
   totalMacros: MacroNutrients;
   notes?: string;
 }
-
-// export interface WeeklyMealPlan {
-//   id: string;
-//   userId: string;
-//   weekStartDate: string;
-//   weekEndDate: string;
-//   dailyPlans: DailyMealPlan[];
-//   weeklyTotals: MacroNutrients;
-//   shoppingList: ShoppingListItem[];
-//   createdAt: Date;
-//   updatedAt: Date;
-// }
 
 export interface ShoppingListItem {
   item: string;
@@ -240,13 +227,13 @@ export type WeeklyMealPlan = z.infer<typeof WeeklyPlanSchema>;
 export const RecipeSchema = z.object({
   recipeName: z.string(),
   description: z.string().max(300),
-  ingredients: z.array(z.string()), // Quantities included in string: "200g Chicken"
+  ingredients: z.array(z.string()),
   instructions: z.array(z.string()),
   prepTimeMinutes: z.number(),
   cookTimeMinutes: z.number(),
   difficulty: z.enum(['Easy', 'Medium', 'Hard']),
-  macrosPerServing: MacroSchema, // Reusing your existing macro schema
-  tags: z.array(z.string()).optional(), // e.g., ["Gluten-Free", "High Protein"]
+  macrosPerServing: MacroSchema,
+  tags: z.array(z.string()).optional(),
 });
 
 export type Recipe = z.infer<typeof RecipeSchema>;
