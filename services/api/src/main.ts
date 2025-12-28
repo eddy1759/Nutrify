@@ -13,19 +13,15 @@ async function bootstrap() {
 
   app.use(helmet());
 
-  // app.enableCors({
-  //   origin: configService.get<string>('CORS_ORIGIN') || '*',
-  //   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-  //   credentials: true,
-  // });
+  app.enableCors();
 
-  app.setGlobalPrefix('api', {
-    exclude: ['/', 'health'],
-  });
-  app.enableVersioning({
-    type: VersioningType.URI,
-    defaultVersion: '1',
-  });
+  // app.setGlobalPrefix('api', {
+  //   exclude: ['/', 'health'],
+  // });
+  // app.enableVersioning({
+  //   type: VersioningType.URI,
+  //   defaultVersion: '1',
+  // });
 
   await app.listen(Number(PORT), '0.0.0.0');
 
