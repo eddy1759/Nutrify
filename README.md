@@ -1,13 +1,3 @@
----
-title: Nutrify Backend
-emoji: 🥑
-colorFrom: green
-colorTo: blue
-sdk: docker
-pinned: false
-app_port: 3000
----
-
 <!-- ================================================= -->
 <!--                 NUTRIFY README                    -->
 <!--   AI Nutrition • Food Label Scanner • NOVA AI     -->
