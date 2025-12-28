@@ -25,9 +25,7 @@ COPY services/api/ ./
 # Build
 RUN pnpm run build
 
-ENV PORT=7860
-
-# 11. Expose Port
-EXPOSE 7860
+ENV PORT=3000
+EXPOSE 3000
 
 CMD ["node", "dist/src/main.js"]
