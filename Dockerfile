@@ -14,14 +14,14 @@ COPY services/api/package*.json ./
 COPY services/api/prisma ./prisma/
 
 # 5. Install Dependencies
-RUN npm install
+RUN pnpm install
 
 # 6. Copy Source Code
 COPY services/api/ .
 
 # 7. Generate Prisma Client & Build NestJS
 RUN npx prisma generate
-RUN npm run build
+RUN pnpm run build
 
 # 8. Force IPv4 (Network Fix)
 ENV NODE_OPTIONS="--dns-result-order=ipv4first"
