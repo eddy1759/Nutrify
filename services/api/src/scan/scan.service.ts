@@ -83,7 +83,7 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     private readonly llmProvider: LlmLanguageProvider,
     private readonly amqpConnection: AmqpConnection,
   ) {
-    const mlUrl = this.configService.get<string>('ML_SERVICE_URL');
+    const mlUrl = this.configService.get<string>('ML_SERVICE_URL').replace(/\/$/, '');
     if (!mlUrl) {
       this.logger.warn('ML_SERVICE_URL not configured - Using fallback logic.');
     }

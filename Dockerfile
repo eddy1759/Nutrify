@@ -30,4 +30,4 @@ ENV PORT=7860
 # 11. Expose Port
 EXPOSE 7860
 
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/main.js"]
