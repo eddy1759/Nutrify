@@ -30,5 +30,5 @@ ENV PORT=7860
 # 9. Expose Port
 EXPOSE 7860
 
-# 10. Run directly
+# Run directly
 CMD ["node", "dist/src/main.js"]
