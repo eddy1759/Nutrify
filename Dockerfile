@@ -1,34 +1,33 @@
-# Dockerfile (Main Space)
-
-# 1. Use Node 22
 FROM node:22-slim
 
-# 2. Install OpenSSL & Tesseract
-RUN apt-get update -y && apt-get install -y openssl tesseract-ocr && rm -rf /var/lib/apt/lists/*
+# System deps
+RUN apt-get update -y && \
+    apt-get install -y openssl tesseract-ocr && \
+    rm -rf /var/lib/apt/lists/*
 
-# 3. Set Workdir
+# Setup pnpm
+RUN npm install -g pnpm
+
 WORKDIR /app
 
-# 4. Copy Package Files
+# Copy package files first for caching
 COPY services/api/package*.json ./
-COPY services/api/prisma ./prisma/
-
-# 5. Install Dependencies
+COPY services/api/pnpm-lock.yaml ./
 RUN pnpm install
 
-# 6. Copy Source Code
-COPY services/api/ .
-
-# 7. Generate Prisma Client & Build NestJS
+# Copy prisma before generate
+COPY services/api/prisma ./prisma/
 RUN npx prisma generate
+
+# Copy rest of the app
+COPY services/api/ ./
+
+# Build
 RUN pnpm run build
 
-# 8. Force IPv4 (Network Fix)
-ENV NODE_OPTIONS="--dns-result-order=ipv4first"
 ENV PORT=7860
 
-# 9. Expose Port
+# 11. Expose Port
 EXPOSE 7860
 
-# Run directly
-CMD ["node", "dist/src/main.js"]
+CMD ["node", "dist/main.js"]
