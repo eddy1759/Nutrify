@@ -16,6 +16,7 @@ import { NotificationModule } from './notification/notification.module';
 import { BiometricModule } from './biometric/biometric.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { RabbitMQGlobalModule } from './common/rabbitmq/rabbitmq.module';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -38,7 +39,7 @@ import { RabbitMQGlobalModule } from './common/rabbitmq/rabbitmq.module';
     BiometricModule,
     TrackingModule,
   ],
-  controllers: [],
+  controllers: [AppController],
   providers: [EncryptionService],
 })
 export class AppModule implements OnApplicationBootstrap {

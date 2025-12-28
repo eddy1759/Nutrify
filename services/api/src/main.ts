@@ -13,13 +13,15 @@ async function bootstrap() {
 
   app.use(helmet());
 
-  app.enableCors({
-    origin: configService.get<string>('CORS_ORIGIN') || '*',
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    credentials: true,
-  });
+  // app.enableCors({
+  //   origin: configService.get<string>('CORS_ORIGIN') || '*',
+  //   methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+  //   credentials: true,
+  // });
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    exclude: ['/', 'health'],
+  });
   app.enableVersioning({
     type: VersioningType.URI,
     defaultVersion: '1',
@@ -30,8 +32,10 @@ async function bootstrap() {
   // 3. Log the ACTUAL address to confirm it worked
   const server = app.getHttpServer();
   const address = server.address();
-  logger.log(`🚀 API Gateway is listening on: ${JSON.stringify(address)}`);
-  
+  logger.log(
+    `🚀 API Gateway is listening on: ${JSON.stringify(address)} on ${NODE_ENV} environment`,
+  );
+
   if (typeof address === 'object' && address?.family === 'IPv6') {
     logger.error('❌ WARNING: Server is bound to IPv6! Hugging Face may 404.');
   }
