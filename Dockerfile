@@ -1,9 +1,9 @@
-# Dockerfile (Main)
+# Dockerfile (Main Space)
 
 # 1. Use Node 22
 FROM node:22-slim
 
-# 2. Install OpenSSL (Required for Prisma) & Tesseract (For OCR)
+# 2. Install OpenSSL & Tesseract
 RUN apt-get update -y && apt-get install -y openssl tesseract-ocr && rm -rf /var/lib/apt/lists/*
 
 # 3. Set Workdir
@@ -14,7 +14,7 @@ COPY services/api/package*.json ./
 COPY services/api/prisma ./prisma/
 
 # 5. Install Dependencies
-RUN npm ci
+RUN npm install
 
 # 6. Copy Source Code
 COPY services/api/ .
@@ -30,5 +30,5 @@ ENV PORT=7860
 # 9. Expose Port
 EXPOSE 7860
 
-# 10. Run directly (No bash script needed!)
+# 10. Run directly
 CMD ["node", "dist/src/main.js"]
