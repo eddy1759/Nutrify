@@ -12,11 +12,17 @@ export class EmailService {
     const transportOpts = {
       host: this.configService.getOrThrow<string>('SMTP_HOST'),
       port: this.configService.getOrThrow<number>('SMTP_PORT'),
-      secure: this.configService.get<boolean>('SMTP_SECURE', false),
+
+      // ⚠️ FIX 1: Explicitly convert string 'true'/'false' to boolean
+      secure: this.configService.get<string>('SMTP_SECURE') === 'true',
+
       auth: {
         user: this.configService.getOrThrow<string>('SMTP_USER'),
         pass: this.configService.getOrThrow<string>('SMTP_PASS'),
       },
+      // ⚠️ FIX 2: Add connection timeout settings to prevent infinite hangs
+      connectionTimeout: 10000, // 10 seconds
+      greetingTimeout: 10000,
     };
 
     this.transporter = nodemailer.createTransport(transportOpts);
@@ -68,8 +74,9 @@ export class EmailService {
     subject: string,
     html: string,
   ): Promise<void> {
+    const fromAddress = this.configService.get<string>('SMTP_FROM');
     const mailOpts = {
-      from: `"NutrifyAI Support" <${this.configService.get('SMTP_USER')}>`,
+      from: `"NutrifyAI Support" <${fromAddress}>`,
       to,
       subject,
       html,
