@@ -1,38 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RabbitSubscribe } from '@golevelup/nestjs-rabbitmq';
-import * as nodemailer from 'nodemailer';
+import * as Brevo from '@getbrevo/brevo';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private transporter: nodemailer.Transporter;
+  private apiInstance: Brevo.TransactionalEmailsApi;
 
   constructor(private readonly configService: ConfigService) {
-    const transportOpts = {
-      host: this.configService.getOrThrow<string>('SMTP_HOST'),
-      port: this.configService.getOrThrow<number>('SMTP_PORT'),
+    // 1. Initialize Brevo API Instance
+    this.apiInstance = new Brevo.TransactionalEmailsApi();
 
-      // ⚠️ FIX 1: Explicitly convert string 'true'/'false' to boolean
-      secure: this.configService.get<string>('SMTP_SECURE') === 'true',
+    // 2. Set the API Key (Get this from Brevo Dashboard -> SMTP & API -> API Keys)
+    const apiKey = this.configService.getOrThrow<string>('BREVO_API_KEY');
+    this.apiInstance.setApiKey(
+      Brevo.TransactionalEmailsApiApiKeys.apiKey,
+      apiKey,
+    );
 
-      auth: {
-        user: this.configService.getOrThrow<string>('SMTP_USER'),
-        pass: this.configService.getOrThrow<string>('SMTP_PASS'),
-      },
-      // ⚠️ FIX 2: Add connection timeout settings to prevent infinite hangs
-      connectionTimeout: 10000, // 10 seconds
-      greetingTimeout: 10000,
-    };
-
-    this.transporter = nodemailer.createTransport(transportOpts);
-
-    this.transporter
-      .verify()
-      .then(() => this.logger.log('📧 Email service configured and ready'))
-      .catch((e) =>
-        this.logger.error('❌ Email service configuration error', e),
-      );
+    this.logger.log('📧 Email service configured via HTTP API (Firewall Safe)');
   }
 
   @RabbitSubscribe({
@@ -74,22 +61,28 @@ export class EmailService {
     subject: string,
     html: string,
   ): Promise<void> {
-    const fromAddress = this.configService.get<string>('SMTP_FROM');
-    const mailOpts = {
-      from: `"NutrifyAI Support" <${fromAddress}>`,
-      to,
-      subject,
-      html,
-    };
+    const sendSmtpEmail = new Brevo.SendSmtpEmail();
+
+    // 3. Configure the Email Object
+    sendSmtpEmail.subject = subject;
+    sendSmtpEmail.htmlContent = html;
+
+    // ⚠️ IMPORTANT: Use the verified sender you set up in Brevo
+    const senderEmail =
+      this.configService.get('SMTP_FROM') || 'eddy1759@gmail.com';
+    sendSmtpEmail.sender = { name: 'Nutrify App', email: senderEmail };
+
+    sendSmtpEmail.to = [{ email: to }];
 
     try {
-      const info = await this.transporter.sendMail(mailOpts);
-      this.logger.log(`✅ Email sent to ${to}: ${info.messageId}`);
+      // 4. Send via HTTP (Port 443 - Never Blocked)
+      const data = await this.apiInstance.sendTransacEmail(sendSmtpEmail);
+      this.logger.log(
+        `✅ Email sent to ${to}. Message ID: ${data.body.messageId}`,
+      );
     } catch (error) {
-      this.logger.error(`❌ Failed to send email to ${to}:`, error);
-      // In RabbitMQ, if we throw here, the message will be NACKed and retried.
-      // This is good for transient errors (network), but bad for persistent ones (bad email).
-      // For now, we log only to avoid infinite loops on bad emails.
+      // Log the full error body for debugging
+      this.logger.error(`❌ API Error sending to ${to}:`, error.body || error);
     }
   }
 
