@@ -8,7 +8,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
-  const PORT = 3000;
+  const PORT = 3333;
   const NODE_ENV = configService.get<string>('NODE_ENV');
 
   app.use(helmet());
