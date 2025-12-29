@@ -60,56 +60,18 @@ export class GamificationService {
     await this.awardXP(payload.userId, 30); // Meal Log XP reward
   }
 
+  @RabbitSubscribe({
+    exchange: 'nutrify.events',
+    routingKey: 'user.logged_in',
+    queue: 'gamification.login', // Dedicated queue for login processing
+  })
+  async checkLogin(payload: { userId: string }) {
+    await this.handleDailyLogin(payload.userId);
+  }
+
   // ==================================================================
   // 🚀 Core Logic
   // ==================================================================
-
-  // async handleDailyLogin(userId: string) {
-  //   const user = await this.prisma.user.findUnique({ where: { id: userId } });
-  //   if (!user) return null;
-
-  //   const today = startOfDay(new Date());
-  //   const lastLogin = user.lastLoginDate
-  //     ? startOfDay(user.lastLoginDate)
-  //     : null;
-
-  //   if (lastLogin && lastLogin.getTime() === today.getTime()) {
-  //     return { streak: user.currentLoginStreak, reward: 0, status: 'CLAIMED' };
-  //   }
-
-  //   let newStreak = 1;
-  //   let status = 'RESET';
-
-  //   if (lastLogin && differenceInCalendarDays(today, lastLogin) === 1) {
-  //     newStreak = user.currentLoginStreak + 1;
-  //     status = 'CONTINUED';
-  //   }
-
-  //   const xpReward = 25;
-  //   const newTotalLogins = user.totalLogins + 1;
-
-  //   await this.prisma.$transaction(async (tx) => {
-  //     await tx.user.update({
-  //       where: { id: userId },
-  //       data: {
-  //         lastLoginDate: new Date(),
-  //         currentLoginStreak: newStreak,
-  //         longestLoginStreak: Math.max(newStreak, user.longestLoginStreak),
-  //         totalLogins: newTotalLogins,
-  //         xp: { increment: xpReward },
-  //       },
-  //     });
-  //     await tx.dailyLog.upsert({
-  //       where: { userId_date: { userId, date: today } },
-  //       create: { userId, date: today, didLogin: true },
-  //       update: { didLogin: true },
-  //     });
-  //   });
-
-  //   await this.checkLoginStreakBadges(userId, newStreak);
-  //   await this.checkTotalLoginBadges(userId, newTotalLogins);
-  //   return { streak: newStreak, reward: xpReward, status };
-  // }
 
   async handleDailyLogin(userId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
