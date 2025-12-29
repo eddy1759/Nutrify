@@ -83,9 +83,7 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
     private readonly llmProvider: LlmLanguageProvider,
     private readonly amqpConnection: AmqpConnection,
   ) {
-    const mlUrl = this.configService
-      .get<string>('ML_SERVICE_URL')
-      .replace(/\/$/, '');
+    const mlUrl = this.configService.get<string>('ML_SERVICE_URL');
     if (!mlUrl) {
       this.logger.warn('ML_SERVICE_URL not configured - Using fallback logic.');
     }
@@ -367,55 +365,70 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
 
   private async predictNovaWithResilience(ingredients: string) {
     const fallback = () => {
-      this.logger.warn('ML Service unavailable. Using Rule-Based Fallback.');
+      this.logger.warn('using Rule-Based Fallback for Nova Score.');
       return {
         nova_group: this.fallbackNovaPrediction(ingredients),
         confidence: 0.3,
-        processing_reasons: ['Service Circuit Open - Rule Based Fallback'],
+        processing_reasons: ['Service Unavailable - Rule Based Fallback'],
         allergens: [],
       };
     };
 
     if (!this.mlServiceUrl) return fallback();
 
-    return this.mlCircuitBreaker.execute(
-      () =>
-        withRetry(
-          () => this.predictNova(ingredients),
-          {
-            maxAttempts: 2,
-            initialDelayMs: 500,
-            retryableErrors: ['ECONNREFUSED', 'ETIMEDOUT', 'timeout'],
-          },
-          this.logger,
-          'ML prediction',
-        ),
-      fallback,
-    );
+    try {
+      return this.mlCircuitBreaker.execute(
+        () =>
+          withRetry(
+            () => this.predictNova(ingredients),
+            {
+              maxAttempts: 2,
+              initialDelayMs: 500,
+              retryableErrors: ['ECONNREFUSED', 'ETIMEDOUT', 'timeout'],
+            },
+            this.logger,
+            'ML prediction',
+          ),
+        fallback,
+      );
+    } catch (e) {
+      this.logger.error(`Circuit Breaker failed completely: ${e.message}`);
+      return fallback();
+    }
   }
 
   private async predictNova(ingredients: string) {
-    const { data } = await firstValueFrom(
-      this.httpService
-        .post(
-          `${this.mlServiceUrl}/predict`,
-          { ingredients },
-          { timeout: CONFIG.ML_SERVICE_TIMEOUT_MS },
-        )
-        .pipe(timeout(CONFIG.ML_SERVICE_TIMEOUT_MS)),
-    );
-    const validated = MLServiceResponseSchema.parse(data);
-    if (validated.confidence < 0.5) {
-      this.logger.warn(
-        `Low ML confidence (${validated.confidence}). Hybrid fallback.`,
+    try {
+      if (!this.mlServiceUrl || this.mlServiceUrl === '') {
+        this.logger.warn('ML_SERVICE_URL is missing. Skipping ML request.');
+        throw new Error('ML_SERVICE_URL_MISSING');
+      }
+
+      const { data } = await firstValueFrom(
+        this.httpService
+          .post(
+            `${this.mlServiceUrl}/predict`,
+            { ingredients },
+            { timeout: CONFIG.ML_SERVICE_TIMEOUT_MS },
+          )
+          .pipe(timeout(CONFIG.ML_SERVICE_TIMEOUT_MS)),
       );
-      return {
-        ...validated,
-        nova_group: this.fallbackNovaPrediction(ingredients),
-        allergens: null,
-      };
+      const validated = MLServiceResponseSchema.parse(data);
+      if (validated.confidence < 0.5) {
+        this.logger.warn(
+          `Low ML confidence (${validated.confidence}). Hybrid fallback.`,
+        );
+        return {
+          ...validated,
+          nova_group: this.fallbackNovaPrediction(ingredients),
+          allergens: null,
+        };
+      }
+      return validated;
+    } catch (error) {
+      this.logger.warn(`ML Service Failed: ${error.message}. Using Fallback.`);
+      throw error;
     }
-    return validated;
   }
 
   private async analyzeWithGeminiResilience(
