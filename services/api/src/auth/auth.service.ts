@@ -112,7 +112,7 @@ export class AuthService {
       }
 
       // await this.sendVerificationEmail(data.email, otp);
-      await this.amqpConnection.publish('nutrify.events', 'auth.registered', {
+      await this.emitEvent('auth.registered', {
         email: normalizedEmail,
         name: normalizedUsername,
         otp,
@@ -159,7 +159,7 @@ export class AuthService {
 
       // #TODO: refactor the email sending to use a background job or task
       // await this.emailService.sendWelcomeMail(user.email, user.name);
-      await this.amqpConnection.publish('nutrify.events', 'auth.verified', {
+      await this.emitEvent('auth.verified', {
         email: user.email,
         name: user.name,
       });
@@ -186,7 +186,7 @@ export class AuthService {
 
       this.logger.log(`User logged in: ${user.email}`);
 
-      this.amqpConnection.publish('nutrify.events', 'user.logged_in', {
+      this.emitEvent('user.logged_in', {
         userId: user.id,
       });
 
@@ -259,14 +259,10 @@ export class AuthService {
     });
 
     // await this.sendPasswordResetEmail(user.email, otp);
-    await this.amqpConnection.publish(
-      'nutrify.events',
-      'auth.forgot_password',
-      {
-        email: user.email,
-        otp,
-      },
-    );
+    await this.emitEvent('auth.forgot_password', {
+      email: user.email,
+      otp,
+    });
     return { message: 'Reset code sent to email.' };
   }
 
@@ -309,22 +305,6 @@ export class AuthService {
     }
   }
 
-  // private async sendVerificationEmail(to: string, otp: string) {
-  //   this.logger.log(
-  //     `📧 [MOCK EMAIL] To: ${to} | Subject: Verify Your Account | Body: Your OTP is: ${otp}`,
-  //   );
-
-  //   await this.emailService.sendOtp(to, otp);
-  // }
-
-  // private async sendPasswordResetEmail(to: string, otp: string) {
-  //   this.logger.log(
-  //     `📧 [MOCK EMAIL] To: ${to} | Subject: Reset Your Password | Body: Your OTP is: ${otp}`,
-  //   );
-
-  //   await this.emailService.sendOtp(to, otp);
-  // }
-
   async updateRefreshTokenHash(userId: string, refreshToken: string) {
     try {
       const hash = await argon.hash(refreshToken, ARGON2_OPTIONS);
@@ -339,5 +319,11 @@ export class AuthService {
       );
       throw new InternalServerErrorException('Could not update refresh token.');
     }
+  }
+
+  private emitEvent(pattern: string, payload: any) {
+    this.amqpConnection
+      .publish('nutrify.events', pattern, payload)
+      .catch((err) => this.logger.error(`Failed to emit ${pattern}`, err));
   }
 }
