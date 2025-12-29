@@ -31,7 +31,6 @@ export const CalorieAnalysisSchema = z.object({
 export type CalorieAnalysisResult = z.infer<typeof CalorieAnalysisSchema>;
 export type MacroNutrients = z.infer<typeof MacroSchema>;
 
-
 export enum AnalysisStatus {
   AUTO_LOGGED = 'AUTO_LOGGED',
   REQUIRES_REVIEW = 'REQUIRES_REVIEW',

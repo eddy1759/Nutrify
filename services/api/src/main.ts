@@ -23,7 +23,7 @@ async function bootstrap() {
   //   defaultVersion: '1',
   // });
 
-  await app.listen(Number(PORT), '0.0.0.0');
+  await app.listen(Number(PORT));
 
   // 3. Log the ACTUAL address to confirm it worked
   const server = app.getHttpServer();
@@ -31,10 +31,6 @@ async function bootstrap() {
   logger.log(
     `🚀 API Gateway is listening on: ${JSON.stringify(address)} on ${NODE_ENV} environment`,
   );
-
-  if (typeof address === 'object' && address?.family === 'IPv6') {
-    logger.error('❌ WARNING: Server is bound to IPv6! Hugging Face may 404.');
-  }
 }
 
 bootstrap().catch((err) => {
