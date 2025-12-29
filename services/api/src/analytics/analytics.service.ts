@@ -6,6 +6,7 @@ import { LlmLanguageProvider } from '../llm-core/llm.provider';
 
 // 1. Precise Interfaces to prevent "Property does not exist" errors
 export interface DashboardData {
+  avatar: string;
   calories: { target: number; current: number; remaining: number };
   macros: {
     protein: { current: number; target: number };
@@ -52,45 +53,48 @@ export class AnalyticsService {
     const todayStart = startOfDay(new Date());
     const todayEnd = endOfDay(new Date());
 
-    const [profile, aggregates, recentMeals, dailyLog] = await Promise.all([
-      this.prisma.userProfile.findUnique({ where: { userId } }),
-      this.prisma.nutritionLog.aggregate({
-        where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
-        _sum: { calories: true, protein: true, carbs: true, fat: true },
-      }),
-      this.prisma.nutritionLog.findMany({
-        where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
-        orderBy: { createdAt: 'desc' },
-        take: 5,
-      }),
-      this.prisma.dailyLog.findUnique({
-        where: { userId_date: { userId, date: todayStart } },
-      }),
-    ]);
+    const [user, profile, aggregates, recentMeals, dailyLog] =
+      await Promise.all([
+        this.prisma.user.findUnique({ where: { id: userId } }),
+        this.prisma.userProfile.findUnique({ where: { userId } }),
+        this.prisma.nutritionLog.aggregate({
+          where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
+          _sum: { calories: true, protein: true, carbs: true, fat: true },
+        }),
+        this.prisma.nutritionLog.findMany({
+          where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        }),
+        this.prisma.dailyLog.findUnique({
+          where: { userId_date: { userId, date: todayStart } },
+        }),
+      ]);
 
-    if (!profile)
+    if (!user || !profile)
       throw new NotFoundException(
         'User profile not found. Please complete onboarding.',
       );
 
     const dashboardData: DashboardData = {
+      avatar: user.profileImage,
       calories: {
-        target: profile.tdee,
+        target: profile.tdee || 0,
         current: aggregates._sum.calories || 0,
         remaining: Math.max(0, profile.tdee - (aggregates._sum.calories || 0)),
       },
       macros: {
         protein: {
           current: aggregates._sum.protein || 0,
-          target: Math.round((profile.tdee * 0.3) / 4),
+          target: Math.round((profile.tdee * 0.3) / 4) || 0,
         },
         fat: {
           current: aggregates._sum.fat || 0,
-          target: Math.round((profile.tdee * 0.25) / 9),
+          target: Math.round((profile.tdee * 0.25) / 9) || 0,
         },
         carbs: {
           current: aggregates._sum.carbs || 0,
-          target: Math.round((profile.tdee * 0.45) / 4),
+          target: Math.round((profile.tdee * 0.45) / 4) || 0,
         },
       },
       biometrics: {
