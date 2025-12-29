@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { EncryptionService } from '../encryption/encryption.service';
 import { GamificationService } from '../gamification/gamification.service';
@@ -39,123 +44,147 @@ export class BiometricService {
   ) {}
 
   async createProfile(userId: string, dto: CreateProfileDto) {
-    this.logger.log(`Creating profile for user: ${userId}`);
+    try {
+      this.logger.log(`Creating profile for user: ${userId}`);
 
-    const existing = await this.prisma.userProfile.findUnique({
-      where: { userId },
-    });
-    if (existing) return this.updateProfile(userId, dto);
-
-    const age = this.calculateAge(new Date(dto.dateOfBirth));
-    const { bmr, tdee } = this.calculateMetabolicRates(dto, age);
-
-    const encrypted = this.encryptProfileData(dto);
-
-    const profile = await this.prisma.userProfile.create({
-      data: {
-        userId,
-        ...encrypted,
-        activityLevel: dto.activityLevel,
-        goal: dto.goal,
-        bmr,
-        tdee,
-      },
-    });
-
-    if (this.isProfileComplete(profile)) {
-      this.emitEvent('user.profile_updated', {
-        userId,
-        action: 'CREATED',
+      const existing = await this.prisma.userProfile.findUnique({
+        where: { userId },
       });
-    }
+      if (existing) return this.updateProfile(userId, dto);
 
-    return this.decryptProfile(profile);
+      const age = this.calculateAge(new Date(dto.dateOfBirth));
+      const { bmr, tdee } = this.calculateMetabolicRates(dto, age);
+
+      const encrypted = this.encryptProfileData(dto);
+
+      const profile = await this.prisma.userProfile.create({
+        data: {
+          userId,
+          ...encrypted,
+          activityLevel: dto.activityLevel,
+          goal: dto.goal,
+          bmr,
+          tdee,
+        },
+      });
+
+      if (this.isProfileComplete(profile)) {
+        this.emitEvent('user.profile_updated', {
+          userId,
+          action: 'CREATED',
+        });
+      }
+
+      return this.decryptProfile(profile);
+    } catch (error) {
+      this.logger.error(error);
+      throw new InternalServerErrorException(
+        'An error occurred while trying to create profile',
+      );
+    }
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto) {
-    this.logger.log(`Updating profile for user: ${userId}`);
+    try {
+      this.logger.log(`Updating profile for user: ${userId}`);
 
-    const existing = await this.prisma.userProfile.findUnique({
-      where: { userId },
-    });
-    if (!existing) throw new NotFoundException('Profile not found');
-
-    const age = this.calculateAge(new Date(dto.dateOfBirth));
-    const { bmr, tdee } = this.calculateMetabolicRates(dto, age);
-
-    const encrypted = this.encryptProfileData(dto);
-
-    const updated = await this.prisma.userProfile.update({
-      where: { userId },
-      data: {
-        ...encrypted,
-        activityLevel: dto.activityLevel,
-        goal: dto.goal,
-        bmr,
-        tdee,
-      },
-    });
-
-    if (this.isProfileComplete(updated)) {
-      this.emitEvent('user.profile_updated', {
-        userId,
-        action: 'CREATED',
+      const existing = await this.prisma.userProfile.findUnique({
+        where: { userId },
       });
-    }
+      if (!existing) throw new NotFoundException('Profile not found');
 
-    return this.decryptProfile(updated);
+      const age = this.calculateAge(new Date(dto.dateOfBirth));
+      const { bmr, tdee } = this.calculateMetabolicRates(dto, age);
+
+      const encrypted = this.encryptProfileData(dto);
+
+      const updated = await this.prisma.userProfile.update({
+        where: { userId },
+        data: {
+          ...encrypted,
+          activityLevel: dto.activityLevel,
+          goal: dto.goal,
+          bmr,
+          tdee,
+        },
+      });
+
+      if (this.isProfileComplete(updated)) {
+        this.emitEvent('user.profile_updated', {
+          userId,
+          action: 'CREATED',
+        });
+      }
+
+      return this.decryptProfile(updated);
+    } catch (error) {
+      this.logger.error(
+        'An error occur while trying to update user profile: ',
+        error,
+      );
+      throw new InternalServerErrorException(
+        'An error occur while trying to update user profile',
+      );
+    }
   }
 
   async getProfile(userId: string) {
-    const [encryptedProfile, user, stats] = await Promise.all([
-      this.prisma.userProfile.findUnique({
-        where: { userId },
-      }),
-      this.prisma.user.findUnique({
-        where: { id: userId },
-        include: {
-          _count: {
-            select: { badges: true }, // Count badges efficiently
+    try {
+      const [encryptedProfile, user, stats] = await Promise.all([
+        this.prisma.userProfile.findUnique({
+          where: { userId },
+        }),
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          include: {
+            _count: {
+              select: { badges: true }, // Count badges efficiently
+            },
           },
-        },
-      }),
-      this.gamificationService.getUserStats(userId),
-    ]);
+        }),
+        this.gamificationService.getUserStats(userId),
+      ]);
 
-    if (!encryptedProfile || !user || !stats)
-      throw new NotFoundException('Profile not found');
-    const profile = this.decryptProfile(encryptedProfile);
-    return {
-      id: profile.id,
-      user: {
-        userId: profile.userId,
-        email: user.email,
-        name: user.name,
-        avatar: user.profileImage,
-        allergens: user.allergies,
-        level: user.level,
-        xp: user.xp,
-        joinedAt: user.createdAt,
-      },
-      bio: {
-        gender: profile.gender,
-        dateOfBirth: profile.dateOfBirth,
-        heightCm: profile.heightCm,
-        currentWeight: profile.currentWeight,
-        activityLevel: profile.activityLevel,
-        goal: profile.goal,
-        bmr: profile.bmr,
-        tdee: profile.tdee,
-      },
-      gamification: {
-        streak: user.currentLoginStreak,
-        totalLogins: user.totalLogins,
-        totalBadges: user._count.badges,
-        xpToNextLevel: stats.xpToNextLevel,
-        progress: stats.progressPercent,
-        recentBadges: stats.badges.slice(0, 3), // Show top 3 recent
-      },
-    };
+      if (!encryptedProfile || !user || !stats)
+        throw new NotFoundException('Profile not found');
+      const profile = this.decryptProfile(encryptedProfile);
+      return {
+        id: profile.id,
+        user: {
+          userId: profile.userId,
+          email: user.email,
+          name: user.name,
+          avatar: user.profileImage,
+          allergens: user.allergies,
+          level: user.level,
+          xp: user.xp,
+          joinedAt: user.createdAt,
+        },
+        bio: {
+          gender: profile.gender,
+          dateOfBirth: profile.dateOfBirth,
+          heightCm: profile.heightCm,
+          currentWeight: profile.currentWeight,
+          activityLevel: profile.activityLevel,
+          goal: profile.goal,
+          bmr: profile.bmr,
+          tdee: profile.tdee,
+        },
+        gamification: {
+          streak: user.currentLoginStreak,
+          totalLogins: user.totalLogins,
+          totalBadges: user._count.badges,
+          xpToNextLevel: stats.xpToNextLevel,
+          progress: stats.progressPercent,
+          recentBadges: stats.badges.slice(0, 3), // Show top 3 recent
+        },
+      };
+    } catch (error) {
+      this.logger.error(error);
+      throw new InternalServerErrorException(
+        'An error occur trying to get user profile',
+      );
+    }
   }
 
   private calculateAge(dOB: Date): number {
