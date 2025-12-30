@@ -4,7 +4,6 @@ import { RedisService } from '../common/redis/redis.service';
 import { startOfDay, endOfDay, subDays } from 'date-fns';
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
 
-// 1. Precise Interfaces to prevent "Property does not exist" errors
 export interface DashboardData {
   avatar: string;
   calories: { target: number; current: number; remaining: number };
@@ -14,7 +13,16 @@ export interface DashboardData {
     carbs: { current: number; target: number };
   };
   biometrics: { waterMl: number; weightKg: number | null };
-  recentMeals: any[];
+  // Updated interface to support both types
+  recentMeals: Array<{
+    id: string;
+    type: 'MEAL' | 'SCAN'; // 👈 New discriminator
+    name: string;
+    kcal: number | null;
+    time: Date;
+    imageUrl: string | null;
+    meta?: any; // Extra data like Nova Score for scans
+  }>;
 }
 
 export interface AnalyticsData {
@@ -53,7 +61,8 @@ export class AnalyticsService {
     const todayStart = startOfDay(new Date());
     const todayEnd = endOfDay(new Date());
 
-    const [user, profile, aggregates, recentMeals, dailyLog] =
+    // 1. Fetch Data in Parallel
+    const [user, profile, aggregates, recentLogEntries, recentScans, dailyLog] =
       await Promise.all([
         this.prisma.user.findUnique({ where: { id: userId } }),
         this.prisma.userProfile.findUnique({ where: { userId } }),
@@ -61,7 +70,14 @@ export class AnalyticsService {
           where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
           _sum: { calories: true, protein: true, carbs: true, fat: true },
         }),
+        // Fetch recent MEALS
         this.prisma.nutritionLog.findMany({
+          where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
+          orderBy: { createdAt: 'desc' },
+          take: 5,
+        }),
+        // Fetch recent SCANS
+        this.prisma.productScan.findMany({
           where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
           orderBy: { createdAt: 'desc' },
           take: 5,
@@ -75,6 +91,30 @@ export class AnalyticsService {
       throw new NotFoundException(
         'User profile not found. Please complete onboarding.',
       );
+
+    // 2. Merge and Sort Recent Activity
+    const combinedHistory = [
+      ...recentLogEntries.map((m) => ({
+        id: m.id,
+        type: 'MEAL' as const,
+        name: m.foodName,
+        kcal: m.calories,
+        time: m.createdAt,
+        imageUrl: m.imageUrl,
+        meta: null,
+      })),
+      ...recentScans.map((s) => ({
+        id: s.id,
+        type: 'SCAN' as const,
+        name: s.productName || 'Scanned Product',
+        kcal: null, // Scans might not have calories immediately
+        time: s.createdAt,
+        imageUrl: s.imageUrl,
+        meta: { novaScore: s.novaScore, isSafe: s.isSafe },
+      })),
+    ]
+      .sort((a, b) => b.time.getTime() - a.time.getTime()) // Sort by newest first
+      .slice(0, 5); // Take top 5
 
     const dashboardData: DashboardData = {
       avatar: user.profileImage,
@@ -101,13 +141,7 @@ export class AnalyticsService {
         waterMl: dailyLog?.waterMl || 0,
         weightKg: dailyLog?.weightKg || null,
       },
-      recentMeals: recentMeals.map((m) => ({
-        id: m.id,
-        name: m.foodName,
-        kcal: m.calories,
-        time: m.createdAt,
-        imageUrl: m.imageUrl,
-      })),
+      recentMeals: combinedHistory,
     };
 
     await this.redis.set(cacheKey, dashboardData, 120);
@@ -148,7 +182,7 @@ export class AnalyticsService {
       (acc, curr) => acc + curr.novaScore * curr._count.novaScore,
       0,
     );
-    const avgNova = novaggr._avg.novaScore || 4; // Default to 4 (UPF) if no scans
+    const avgNova = novaggr._avg.novaScore || 4;
     const healthScore = Math.max(0, Math.round(((4 - avgNova) / 3) * 100));
 
     const analyticsData: AnalyticsData = {
@@ -178,7 +212,6 @@ export class AnalyticsService {
     const cached = await this.redis.get<{ insight: string }>(cacheKey);
     if (cached) return cached;
 
-    // Type casting the results of the two methods
     const dashboard = await this.getDashboard(userId);
     const analytics = await this.getAnalytics(userId);
 
