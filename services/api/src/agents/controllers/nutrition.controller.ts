@@ -8,6 +8,7 @@ import {
   UseGuards,
   BadRequestException,
   Query,
+  Param,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { AtGuard } from '../../auth/guard/at.guard';
@@ -55,5 +56,10 @@ export class NutritionController {
     @Query('date') dateString: string,
   ) {
     return this.nutritionist.getDailyCalorySummary(userId, dateString);
+  }
+
+  @Get(':id')
+  async getMealLog(@Param('id') id: string) {
+    return this.nutritionist.getNutritonProduct(id);
   }
 }
