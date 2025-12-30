@@ -1,4 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
@@ -33,7 +39,6 @@ export class NutritionistAgent {
     imageBuffer: Buffer,
     context?: string,
   ): Promise<NutritionResponse> {
-    // 1. Idempotency Check
     const imageHash = createHash('sha256').update(imageBuffer).digest('hex');
     const cacheKey = `meal_est:${userId}:${imageHash}`;
 
@@ -43,21 +48,17 @@ export class NutritionistAgent {
       return cachedResult;
     }
 
-    // 2. Start Upload & LLM Analysis in Parallel
-    // Note: We don't await them yet, we just start them.
     const uploadPromise = this.cloudinary.uploadImage(imageBuffer, 'meal-logs');
     const analysisPromise = this.llm.analyzeImage(
       imageBuffer,
       NutritionUtils.generatePrompt(context, mealType),
     );
 
-    // 3. Wait for both to settle (finish or fail)
     const [uploadResult, rawResponse] = await Promise.allSettled([
       uploadPromise,
       analysisPromise,
     ]);
 
-    // --- Handling Upload Result ---
     let imageUrl: string | null = null;
     if (uploadResult.status === 'fulfilled') {
       imageUrl = uploadResult.value.secure_url; // Access .value here
@@ -248,5 +249,20 @@ export class NutritionistAgent {
         fat: aggregations._sum.fat || 0,
       },
     };
+  }
+
+  async getNutritonProduct(id: string) {
+    try {
+      const meal = await this.prisma.nutritionLog.findUnique({ where: { id } });
+
+      if (!meal) throw new BadRequestException('Meal not found');
+
+      return meal;
+    } catch (error) {
+      this.logger.error('An error occurred while trying to get meal', error);
+      throw new InternalServerErrorException(
+        'An error occurred while trying to get meal',
+      );
+    }
   }
 }
