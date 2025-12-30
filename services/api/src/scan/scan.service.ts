@@ -404,12 +404,20 @@ export class ScanService implements OnModuleInit, OnModuleDestroy {
         throw new Error('ML_SERVICE_URL_MISSING');
       }
 
+      const hfToken = this.configService.get<string>('HF_ACCESS_TOKEN');
+
       const { data } = await firstValueFrom(
         this.httpService
           .post(
             `${this.mlServiceUrl}/predict`,
             { ingredients },
-            { timeout: CONFIG.ML_SERVICE_TIMEOUT_MS },
+            {
+              headers: {
+                'Content-Type': 'application/json',
+                ...(hfToken ? { Authorization: `Bearer ${hfToken}` } : {}),
+              },
+              timeout: CONFIG.ML_SERVICE_TIMEOUT_MS,
+            },
           )
           .pipe(timeout(CONFIG.ML_SERVICE_TIMEOUT_MS)),
       );
