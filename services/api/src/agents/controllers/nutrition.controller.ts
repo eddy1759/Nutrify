@@ -55,7 +55,7 @@ export class NutritionController {
     @CurrentUser('id') userId: string,
     @Query('date') dateString: string,
   ) {
-    return this.nutritionist.getDailyCalorySummary(userId, dateString);
+    return this.nutritionist.getDailyCalorieSummary(userId, dateString);
   }
 
   @Get(':id')
