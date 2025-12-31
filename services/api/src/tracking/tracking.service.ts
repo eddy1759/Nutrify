@@ -43,13 +43,15 @@ export class TrackingService {
   /**
    * Log Weight (Updates Profile + Daily History)
    */
-  async logWeight(userId: string, weightKg: number) {
-    const today = startOfDay(new Date());
+  async logWeight(userId: string, weightKg: number, date?: string) {
+    const targetDate = date
+      ? startOfDay(new Date(date))
+      : startOfDay(new Date());
 
     // 1. Update Daily Log
     const log = await this.prisma.dailyLog.upsert({
-      where: { userId_date: { userId, date: today } },
-      create: { userId, date: today, weightKg },
+      where: { userId_date: { userId, date: targetDate } },
+      create: { userId, date: targetDate, weightKg },
       update: { weightKg },
     });
 
@@ -57,7 +59,7 @@ export class TrackingService {
     await this.emitEvent('user.logged_weight', {
       userId,
       weightKg,
-      date: today,
+      date: targetDate,
     });
 
     return log;
