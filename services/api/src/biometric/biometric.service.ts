@@ -206,6 +206,66 @@ export class BiometricService {
     }
   }
 
+  async updateCurrentWeightFromLog(userId: string, weightKg: number) {
+    try {
+      this.logger.log(`Syncing tracked weight to profile for user: ${userId}`);
+
+      const profile = await this.prisma.userProfile.findUnique({
+        where: { userId },
+      });
+
+      if (!profile) {
+        this.logger.warn(
+          `Profile not found for user ${userId}, skipping weight sync.`,
+        );
+        return;
+      }
+
+      const heightCm = parseFloat(
+        this.encryption.decrypt(profile.encryptedHeightCm),
+      );
+
+      const gender = this.encryption.decrypt(profile.encryptedGender) as Gender;
+      const dateOfBirth = this.encryption.decrypt(profile.encryptedDateOfBirth);
+
+      const age = this.calculateAge(new Date(dateOfBirth));
+
+      const calculationContext = {
+        currentWeight: weightKg, // Use the NEW weight
+        heightCm,
+        gender,
+        activityLevel: profile.activityLevel as ActivityLevel,
+      };
+
+      const { bmr, tdee } = this.calculateMetabolicRates(
+        calculationContext as CreateProfileDto,
+        age,
+      );
+
+      const encryptedCurrentWeight = this.encryption.encrypt(
+        weightKg.toString(),
+      );
+
+      await this.prisma.userProfile.update({
+        where: { userId },
+        data: {
+          encryptedCurrentWeight,
+          bmr,
+          tdee,
+        },
+      });
+
+      this.emitEvent('user.profile_updated', {
+        userId,
+        action: 'WEIGHT_SYNC',
+        newWeight: weightKg,
+        newTdee: tdee,
+      });
+    } catch (error) {
+      this.logger.error(`Failed to sync weight for user ${userId}`, error);
+    }
+  }
+
   private calculateAge(dOB: Date): number {
     const diffMs = Date.now() - dOB.getTime();
     const ageDt = new Date(diffMs);
