@@ -57,6 +57,7 @@ model User {
 
 model UserProfile {
   id        String   @id @default(uuid())
+  onboardingCompleted Boolean @default(false)
   userId    String   @unique
   user      User     @relation(fields: [userId], references: [id])
 
@@ -184,6 +185,10 @@ model NutritionLog {
   protein   Int
   carbs     Int
   fat       Int
+  servingSize String
+  confidence  Float
+  explanation String
+  suggestions String[]
   
   createdAt DateTime @default(now())
 }
