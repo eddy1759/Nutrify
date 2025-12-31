@@ -33,7 +33,7 @@ export class LoginDto {
   password!: string;
 }
 
-export class verifyAccountDto {
+export class VerifyAccountDto {
   @IsEmail()
   @IsNotEmpty()
   email!: string;
