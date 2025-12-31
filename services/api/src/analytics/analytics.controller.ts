@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AtGuard } from '../auth/guard/at.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import {
@@ -20,8 +20,12 @@ export class AnalyticsController {
   }
 
   @Get('trends')
-  async getTrends(@CurrentUser('id') userId: string): Promise<AnalyticsData> {
-    return this.analyticsService.getAnalytics(userId);
+  async getTrends(
+    @CurrentUser('id') userId: string,
+    // Defaults to 7D if not provided. Accepts '7D', '14D', '30D', 'ALL'
+    @Query('period') period: string = '7D',
+  ): Promise<AnalyticsData> {
+    return this.analyticsService.getAnalytics(userId, period);
   }
 
   @Get('ai-insights')
