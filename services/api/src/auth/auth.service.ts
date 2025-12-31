@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   InternalServerErrorException,
   ConflictException,
+  HttpException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import * as argon from 'argon2';
@@ -14,13 +15,12 @@ import { JwtService } from '@nestjs/jwt';
 import {
   RegisterDto,
   LoginDto,
-  verifyAccountDto,
+  VerifyAccountDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
-// import { EmailService } from '../email/email.service';
 import { OTPPurpose } from './types/auth.types';
 import { Prisma } from '@prisma/client';
-import { randomInt } from 'crypto';
+import { randomInt, createHash, timingSafeEqual } from 'crypto';
 import { AmqpConnection } from '@golevelup/nestjs-rabbitmq';
 
 const ARGON2_OPTIONS: argon.Options = {
@@ -39,10 +39,9 @@ export class AuthService {
   private readonly jwtRefreshExpiration: any;
 
   constructor(
-    private prisma: PrismaService,
-    private config: ConfigService,
-    private jwtService: JwtService,
-    // private emailService: EmailService,
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+    private readonly jwtService: JwtService,
     private readonly amqpConnection: AmqpConnection,
   ) {
     this.jwtAccessSecret = this.config.getOrThrow<string>('JWT_ACCESS_SECRET');
@@ -54,8 +53,34 @@ export class AuthService {
     );
   }
 
-  private async getTokens(userId: string, email: string, allergies: string[]) {
-    const payload = { sub: userId, email, allergies };
+  /* ───────────────────────── HELPERS ───────────────────────── */
+
+  private normalizeEmail(email: string): string {
+    return email.toLowerCase().trim();
+  }
+
+  private hashOtp(otp: string): string {
+    return createHash('sha256').update(otp).digest('hex');
+  }
+
+  private verifyOtp(raw: string, hashed: string): boolean {
+    const a = Buffer.from(this.hashOtp(raw));
+    const b = Buffer.from(hashed);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  private async emitEvent(pattern: string, payload: unknown) {
+    try {
+      await this.amqpConnection.publish('nutrify.events', pattern, payload);
+    } catch (error) {
+      this.logger.error(`Failed to emit event: ${pattern}`, error.message);
+    }
+  }
+
+  /* ───────────────────────── TOKENS ───────────────────────── */
+
+  private async getTokens(userId: string, email: string) {
+    const payload = { sub: userId, email };
 
     const [at, rt] = await Promise.all([
       // Access Token: 15 minutes
@@ -66,7 +91,7 @@ export class AuthService {
       // Refresh Token: 7 days
       this.jwtService.signAsync(payload, {
         secret: this.jwtRefreshSecret,
-        expiresIn: '7d',
+        expiresIn: this.jwtRefreshExpiration,
       }),
     ]);
 
@@ -78,252 +103,224 @@ export class AuthService {
     };
   }
 
-  async register(data: RegisterDto) {
-    const normalizedEmail = data.email.toLowerCase().trim();
-    const normalizedUsername = data.name.toLowerCase().trim();
-
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: normalizedEmail },
+  private async updateRefreshTokenHash(userId: string, refreshToken: string) {
+    const hash = await argon.hash(refreshToken, ARGON2_OPTIONS);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { hashedRefreshToken: hash },
     });
+  }
 
-    if (existingUser) throw new BadRequestException('User already exists');
+  /* ───────────────────────── REGISTER ───────────────────────── */
+
+  async register(data: RegisterDto) {
+    const email = this.normalizeEmail(data.email);
+    const name = data.name.trim();
 
     try {
-      const hashedPassword = await argon.hash(data.password, ARGON2_OPTIONS);
-
+      const passwordHash = await argon.hash(data.password, ARGON2_OPTIONS);
       const otp = randomInt(100000, 999999).toString();
-      const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-      const purpose = OTPPurpose.EmailVerification;
 
-      const user = await this.prisma.user.create({
+      await this.prisma.user.create({
         data: {
-          email: normalizedEmail,
-          password: hashedPassword,
-          name: normalizedUsername,
-          otpCode: otp,
-          otpExpiresAt: otpExpires,
-          otpPurpose: purpose,
+          email,
+          name,
+          password: passwordHash,
           isVerified: false,
+          otpCode: this.hashOtp(otp),
+          otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          otpPurpose: OTPPurpose.EmailVerification,
         },
       });
 
-      if (this.config.get<string>('NODE_ENV') === 'development') {
-        this.logger.log(`User registered: ${user.id}, otp: ${otp}`);
-      }
+      await this.emitEvent('auth.registered', { email, otp });
 
-      // await this.sendVerificationEmail(data.email, otp);
-      await this.emitEvent('auth.registered', {
-        email: normalizedEmail,
-        name: normalizedUsername,
-        otp,
-      });
-
-      return { message: 'User registered. Please check email for OTP.' };
+      return { message: 'Registration successful. Check email for OTP.' };
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError) {
-        if (error.code === 'P2002')
-          throw new ConflictException('Email Already Exists');
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('Email already exists');
       }
-      this.logger.error(`Registration failed: ${error.message}`);
-      throw new InternalServerErrorException('Could not register user');
+      throw new InternalServerErrorException('Registration failed');
     }
   }
 
-  async verifyAccount(data: verifyAccountDto) {
+  /* ───────────────────────── VERIFY ACCOUNT ───────────────────────── */
+
+  async verifyAccount(data: VerifyAccountDto) {
+    const email = this.normalizeEmail(data.email);
+    const now = new Date();
+
     try {
-      const user = await this.prisma.user.findUnique({
-        where: { email: data.email },
-      });
-      if (!user) throw new BadRequestException('User not found');
+      const user = await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.user.findUnique({ where: { email } });
 
-      if (user.isVerified)
-        throw new BadRequestException('User verified already');
+        if (
+          !existing ||
+          existing.isVerified ||
+          existing.otpPurpose !== OTPPurpose.EmailVerification ||
+          !existing.otpCode ||
+          !existing.otpExpiresAt ||
+          now > existing.otpExpiresAt ||
+          !this.verifyOtp(data.otp, existing.otpCode)
+        ) {
+          throw new BadRequestException('Invalid or expired OTP');
+        }
 
-      // We throw if Now is GREATER THAN (after) Expiry.
-      if (user.otpCode !== data.otp || new Date() > user.otpExpiresAt) {
-        throw new BadRequestException('Invalid or expired OTP');
-      }
-
-      if (user.otpPurpose !== OTPPurpose.EmailVerification)
-        throw new BadRequestException('Invalid OTP purpose');
-
-      await this.prisma.user.update({
-        where: { email: data.email },
-        data: {
-          isVerified: true,
-          otpCode: null,
-          otpExpiresAt: null,
-          otpPurpose: null,
-        },
-      });
-
-      // #TODO: refactor the email sending to use a background job or task
-      // await this.emailService.sendWelcomeMail(user.email, user.name);
-      await this.emitEvent('auth.verified', {
-        email: user.email,
-        name: user.name,
+        return tx.user.update({
+          where: { email },
+          data: {
+            isVerified: true,
+            otpCode: null,
+            otpExpiresAt: null,
+            otpPurpose: null,
+          },
+        });
       });
 
-      return await this.getTokens(user.id, user.email, user.allergies);
+      await this.emitEvent('auth.verified', { email: user.email });
+
+      const tokens = await this.getTokens(user.id, user.email);
+      return {
+        ...tokens,
+        isOnboarded: false,
+      };
     } catch (error) {
-      this.logger.error('An error occur trying to verify user', error.message);
-      throw new InternalServerErrorException('An error occur verifying user');
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException('Verification failed');
     }
   }
+
+  /* ───────────────────────── LOGIN ───────────────────────── */
 
   async login(data: LoginDto) {
+    const email = this.normalizeEmail(data.email);
+
     try {
       const user = await this.prisma.user.findUnique({
-        where: { email: data.email.toLowerCase() },
-      });
-      if (!user) throw new UnauthorizedException('Invalid credentials');
-
-      if (!user.isVerified)
-        throw new UnauthorizedException('Unverified account');
-
-      if (!(await argon.verify(user.password, data.password)))
-        throw new UnauthorizedException('Invalid Credentials');
-
-      this.logger.log(`User logged in: ${user.email}`);
-
-      this.emitEvent('user.logged_in', {
-        userId: user.id,
-      });
-
-      return await this.getTokens(user.id, user.email, user.allergies);
-    } catch (error) {
-      this.logger.log('An error occur while loggin in', error.message);
-      throw new InternalServerErrorException(
-        'Error occur while trying to login',
-      );
-    }
-  }
-
-  async logout(userId: string) {
-    try {
-      await this.prisma.user.updateMany({
-        where: {
-          id: userId,
-          hashedRefreshToken: { not: null },
-        },
-        data: { hashedRefreshToken: null },
-      });
-      return { message: 'Logged out successfully' };
-    } catch (error) {
-      this.logger.error(
-        `Error during logout for user ${userId}`,
-        error.message,
-      );
-      throw new InternalServerErrorException('Logout failed');
-    }
-  }
-
-  async refreshTokens(userId: string, rt: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-    if (!user || !user.hashedRefreshToken)
-      throw new ForbiddenException('Access Denied');
-
-    // Verify the Refresh Token matches the hash in DB
-    const rtMatches = await argon.verify(user.hashedRefreshToken, rt);
-    if (!rtMatches) throw new ForbiddenException('Access Denied');
-
-    // Generate NEW tokens (Rotation)
-    const tokens = await this.getTokens(user.id, user.email, user.allergies);
-
-    return tokens;
-  }
-
-  async forgotPassword(email: string) {
-    const user = await this.prisma.user.findUnique({ where: { email } });
-
-    if (!user) {
-      this.logger.log(
-        `Forgot password attempt for non-existent email: ${email}`,
-      );
-      return { message: 'If this email exists, a reset code has been sent.' };
-    }
-
-    const otp = randomInt(100000, 999999).toString();
-    const otpExpires = new Date(Date.now() + 5 * 60 * 1000);
-    const purpose = OTPPurpose.PasswordReset;
-
-    await this.prisma.user.update({
-      where: { email },
-      data: {
-        otpCode: otp,
-        otpExpiresAt: otpExpires,
-        otpPurpose: purpose,
-      },
-    });
-
-    // await this.sendPasswordResetEmail(user.email, otp);
-    await this.emitEvent('auth.forgot_password', {
-      email: user.email,
-      otp,
-    });
-    return { message: 'Reset code sent to email.' };
-  }
-
-  async resetPassword(data: ResetPasswordDto) {
-    try {
-      const user = await this.prisma.user.findUnique({
-        where: { email: data.email },
+        where: { email },
+        include: { profile: { select: { onboardingCompleted: true } } },
       });
 
       if (
         !user ||
-        user.otpCode !== data.otp ||
-        new Date() > user.otpExpiresAt ||
-        user.otpPurpose !== OTPPurpose.PasswordReset
+        !user.isVerified ||
+        !(await argon.verify(user.password, data.password))
       ) {
-        throw new BadRequestException('Invalid or expired OTP');
+        throw new UnauthorizedException('Invalid credentials');
       }
 
-      const hashedPassword = await argon.hash(data.newPassword);
+      await this.emitEvent('user.logged_in', { userId: user.id });
 
-      await this.prisma.user.update({
-        where: { email: data.email },
-        data: {
-          password: hashedPassword,
-          otpCode: null,
-          otpExpiresAt: null,
-          otpPurpose: null,
-        },
-      });
-
-      return { message: 'Password reset successfully.' };
+      const tokens = await this.getTokens(user.id, user.email);
+      return {
+        ...tokens,
+        isOnboarded: user.profile?.onboardingCompleted ?? false,
+      };
     } catch (error) {
-      this.logger.error(
-        'Error occur while trying to reset password',
-        error.message,
-      );
-      throw new InternalServerErrorException(
-        'Error occur while trying to reset password',
-      );
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException('Login failed');
     }
   }
 
-  async updateRefreshTokenHash(userId: string, refreshToken: string) {
+  /* ───────────────────────── LOGOUT ───────────────────────── */
+
+  async logout(userId: string) {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { hashedRefreshToken: null },
+    });
+    return { message: 'Logged out successfully' };
+  }
+
+  /* ───────────────────────── REFRESH TOKENS ───────────────────────── */
+
+  async refreshTokens(userId: string, refreshToken: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+
+    if (
+      !user ||
+      !user.hashedRefreshToken ||
+      !(await argon.verify(user.hashedRefreshToken, refreshToken))
+    ) {
+      throw new ForbiddenException('Access denied');
+    }
+
+    return this.getTokens(user.id, user.email);
+  }
+
+  /* ───────────────────────── FORGOT PASSWORD ───────────────────────── */
+
+  async forgotPassword(email: string) {
+    const normalized = this.normalizeEmail(email);
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalized },
+    });
+
+    if (!user) {
+      return { message: 'If email exists, reset code sent.' };
+    }
+
+    const otp = randomInt(100000, 999999).toString();
+
+    await this.prisma.user.update({
+      where: { email: normalized },
+      data: {
+        otpCode: this.hashOtp(otp),
+        otpExpiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        otpPurpose: OTPPurpose.PasswordReset,
+      },
+    });
+
+    await this.emitEvent('auth.forgot_password', { email: normalized, otp });
+
+    return { message: 'If email exists, reset code sent.' };
+  }
+
+  /* ───────────────────────── RESET PASSWORD ───────────────────────── */
+
+  async resetPassword(data: ResetPasswordDto) {
+    const email = this.normalizeEmail(data.email);
+    const now = new Date();
+
     try {
-      const hash = await argon.hash(refreshToken, ARGON2_OPTIONS);
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { hashedRefreshToken: hash },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Failed to update refresh token hash for user ${userId}`,
-        error.message,
-      );
-      throw new InternalServerErrorException('Could not update refresh token.');
-    }
-  }
+      await this.prisma.$transaction(async (tx) => {
+        const user = await tx.user.findUnique({ where: { email } });
 
-  private emitEvent(pattern: string, payload: any) {
-    this.amqpConnection
-      .publish('nutrify.events', pattern, payload)
-      .catch((err) => this.logger.error(`Failed to emit ${pattern}`, err));
+        if (
+          !user ||
+          user.otpPurpose !== OTPPurpose.PasswordReset ||
+          !user.otpCode ||
+          !user.otpExpiresAt ||
+          now > user.otpExpiresAt ||
+          !this.verifyOtp(data.otp, user.otpCode)
+        ) {
+          throw new BadRequestException('Invalid or expired OTP');
+        }
+
+        const newPasswordHash = await argon.hash(
+          data.newPassword,
+          ARGON2_OPTIONS,
+        );
+
+        await tx.user.update({
+          where: { email },
+          data: {
+            password: newPasswordHash,
+            otpCode: null,
+            otpExpiresAt: null,
+            otpPurpose: null,
+            hashedRefreshToken: null, // kill all sessions
+          },
+        });
+      });
+
+      return { message: 'Password reset successful.' };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new InternalServerErrorException('Password reset failed');
+    }
   }
 }
