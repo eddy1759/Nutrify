@@ -87,10 +87,7 @@ export class AnalyticsService {
         }),
       ]);
 
-    if (!user || !profile)
-      throw new NotFoundException(
-        'User profile not found. Please complete onboarding.',
-      );
+    if (!user || !profile) throw new NotFoundException('Complete Onboarding.');
 
     // 2. Merge and Sort Recent Activity
     const combinedHistory = [
