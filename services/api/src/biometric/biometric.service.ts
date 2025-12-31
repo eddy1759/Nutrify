@@ -57,18 +57,30 @@ export class BiometricService {
 
       const encrypted = this.encryptProfileData(dto);
 
+      const profileData = {
+        userId,
+        ...encrypted,
+        activityLevel: dto.activityLevel,
+        goal: dto.goal,
+        bmr,
+        tdee,
+        onboardingCompleted: false,
+      };
+
       const profile = await this.prisma.userProfile.create({
         data: {
-          userId,
-          ...encrypted,
-          activityLevel: dto.activityLevel,
-          goal: dto.goal,
-          bmr,
-          tdee,
+          ...profileData,
         },
       });
 
-      if (this.isProfileComplete(profile)) {
+      const isComplete = this.isProfileComplete(profile);
+
+      if (isComplete) {
+        await this.prisma.userProfile.update({
+          where: { userId },
+          data: { onboardingCompleted: true },
+        });
+
         this.emitEvent('user.profile_updated', {
           userId,
           action: 'CREATED',
@@ -109,7 +121,14 @@ export class BiometricService {
         },
       });
 
-      if (this.isProfileComplete(updated)) {
+      const isComplete = this.isProfileComplete(updated);
+
+      if (!existing.onboardingCompleted && isComplete) {
+        await this.prisma.userProfile.update({
+          where: { userId },
+          data: { onboardingCompleted: true },
+        });
+
         this.emitEvent('user.profile_updated', {
           userId,
           action: 'CREATED',
