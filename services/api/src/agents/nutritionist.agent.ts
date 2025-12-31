@@ -54,32 +54,24 @@ export class NutritionistAgent {
       NutritionUtils.generatePrompt(context, mealType),
     );
 
-    const [uploadResult, rawResponse] = await Promise.allSettled([
-      uploadPromise,
-      analysisPromise,
-    ]);
+    const rawResponse = await analysisPromise;
 
-    let imageUrl: string | null = null;
-    if (uploadResult.status === 'fulfilled') {
-      imageUrl = uploadResult.value.secure_url; // Access .value here
-    } else {
-      this.logger.warn('Meal image upload failed', uploadResult.reason); // Access .reason here
+    let analysis: CalorieAnalysisResult;
+    try {
+      analysis = rawResponse.foodName
+        ? (rawResponse as CalorieAnalysisResult)
+        : NutritionUtils.parseResponse(JSON.stringify(rawResponse));
+    } catch (e) {
+      this.logger.error('LLM Analysis failed', e);
+      analysis = NutritionUtils.getFallback(context || 'food');
     }
 
-    // --- Handling Analysis Result ---
-    let analysis: CalorieAnalysisResult;
-
-    // ⚠️ FIX: Check 'rawResponse.status', not 'analysisPromise.status'
-    if (rawResponse.status === 'fulfilled') {
-      const llmData = rawResponse.value; // ⚠️ FIX: Unwrap the value first
-
-      analysis = llmData.foodName
-        ? (llmData as CalorieAnalysisResult)
-        : NutritionUtils.parseResponse(JSON.stringify(llmData));
-    } else {
-      // ⚠️ FIX: Access .reason on the result object
-      this.logger.warn('LLM Analysis failed', rawResponse.reason);
-      analysis = NutritionUtils.getFallback(context || 'food');
+    let imageUrl: string | null = null;
+    try {
+      const uploadResult = await uploadPromise;
+      imageUrl = uploadResult.secure_url;
+    } catch (e) {
+      this.logger.warn('Image upload failed, will retry on confirm', e);
     }
 
     // 4. Prepare Response Data
@@ -88,7 +80,7 @@ export class NutritionistAgent {
 
     let response: NutritionResponse;
 
-    if (confidence >= 0.85) {
+    if (confidence >= 0.8) {
       response = {
         status: AnalysisStatus.CONFIRMED,
         data: fullAnalysis,
@@ -172,6 +164,10 @@ export class NutritionistAgent {
           protein,
           carbs,
           fat,
+          servingSize: finalData.servingSize,
+          confidence: finalData.confidence,
+          explanation: finalData.explanation,
+          suggestions: finalData.suggestions,
           mealType: finalData.mealType || 'Snack',
           imageUrl: finalData.imageUrl || null,
         },
@@ -214,7 +210,7 @@ export class NutritionistAgent {
     return macros.protein > 10 && macros.fat < 20;
   }
 
-  async getDailyCalorySummary(userId: string, dateString: string) {
+  async getDailyCalorieSummary(userId: string, dateString: string) {
     const date = dateString ? new Date(dateString) : new Date();
     const start = new Date(date.setHours(0, 0, 0, 0));
     const end = new Date(date.setHours(23, 59, 59, 999));
