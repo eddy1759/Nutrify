@@ -85,6 +85,18 @@ export class AnalyticsService {
 
     if (!user || !profile) throw new NotFoundException('Complete Onboarding.');
 
+    let dailyTarget = profile.tdee || 2000;
+
+    if (profile.goal === 'cut') {
+      dailyTarget -= 500;
+    } else if (profile.goal === 'bulk') {
+      dailyTarget += 500;
+    }
+
+    const proteinTarget = Math.round((dailyTarget * 0.3) / 4);
+    const fatTarget = Math.round((dailyTarget * 0.25) / 9);
+    const carbsTarget = Math.round((dailyTarget * 0.45) / 4);
+
     const combinedHistory = [
       ...recentLogEntries.map((m) => ({
         id: m.id,
@@ -111,22 +123,22 @@ export class AnalyticsService {
     const dashboardData: DashboardData = {
       avatar: user.profileImage,
       calories: {
-        target: profile.tdee || 0,
+        target: dailyTarget,
         current: aggregates._sum.calories || 0,
-        remaining: Math.max(0, profile.tdee - (aggregates._sum.calories || 0)),
+        remaining: Math.max(0, dailyTarget - (aggregates._sum.calories || 0)),
       },
       macros: {
         protein: {
           current: aggregates._sum.protein || 0,
-          target: Math.round((profile.tdee * 0.3) / 4) || 0,
+          target: proteinTarget,
         },
         fat: {
           current: aggregates._sum.fat || 0,
-          target: Math.round((profile.tdee * 0.25) / 9) || 0,
+          target: fatTarget,
         },
         carbs: {
           current: aggregates._sum.carbs || 0,
-          target: Math.round((profile.tdee * 0.45) / 4) || 0,
+          target: carbsTarget,
         },
       },
       biometrics: {
@@ -178,10 +190,14 @@ export class AnalyticsService {
     }
 
     // 3. Execute Queries in Parallel with Date Filter applied
-    const [scansCount, user, novaggr, novaGroups, weightTrend] =
+    const [scansCount, mealsCount, user, novaggr, novaGroups, weightTrend] =
       await Promise.all([
         // Count scans in this period
         this.prisma.productScan.count({
+          where: { userId, createdAt: dateFilter },
+        }),
+
+        this.prisma.nutritionLog.count({
           where: { userId, createdAt: dateFilter },
         }),
 
@@ -227,11 +243,13 @@ export class AnalyticsService {
     const healthScore =
       avgNova === 0 ? 0 : Math.max(0, Math.round(((4 - avgNova) / 3) * 100));
 
+    const totalProductsAnalysed = scansCount + mealsCount;
+
     const analyticsData: AnalyticsData = {
       summary: {
         nutritionalHealthScore: healthScore,
         totalPts: totalNovaPoints,
-        totalProductsAnalysed: scansCount,
+        totalProductsAnalysed,
         currentStreak: user?.currentLoginStreak || 0,
       },
       novaDistribution: novaGroups.map((g) => ({
