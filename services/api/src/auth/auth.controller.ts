@@ -12,7 +12,7 @@ import { AuthService } from './auth.service';
 import {
   RegisterDto,
   LoginDto,
-  verifyAccountDto,
+  VerifyAccountDto,
   ResetPasswordDto,
 } from './dto/auth.dto';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -30,7 +30,7 @@ export class AuthController {
 
   @Post('verify')
   @HttpCode(HttpStatus.OK)
-  verifyOtp(@Body() data: verifyAccountDto) {
+  verifyOtp(@Body() data: VerifyAccountDto) {
     return this.authService.verifyAccount(data);
   }
 
