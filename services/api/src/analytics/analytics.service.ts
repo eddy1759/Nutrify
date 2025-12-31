@@ -13,15 +13,14 @@ export interface DashboardData {
     carbs: { current: number; target: number };
   };
   biometrics: { waterMl: number; weightKg: number | null };
-  // Updated interface to support both types
   recentMeals: Array<{
     id: string;
-    type: 'MEAL' | 'SCAN'; // 👈 New discriminator
+    type: 'MEAL' | 'SCAN';
     name: string;
     kcal: number | null;
     time: Date;
     imageUrl: string | null;
-    meta?: any; // Extra data like Nova Score for scans
+    meta?: any;
   }>;
 }
 
@@ -51,7 +50,7 @@ export class AnalyticsService {
   ) {}
 
   // ==================================================================
-  // 🍎 DASHBOARD
+  // 🍎 DASHBOARD (Unchanged - Keeps 2 min cache)
   // ==================================================================
   async getDashboard(userId: string): Promise<DashboardData> {
     const cacheKey = `dashboard:${userId}`;
@@ -61,7 +60,6 @@ export class AnalyticsService {
     const todayStart = startOfDay(new Date());
     const todayEnd = endOfDay(new Date());
 
-    // 1. Fetch Data in Parallel
     const [user, profile, aggregates, recentLogEntries, recentScans, dailyLog] =
       await Promise.all([
         this.prisma.user.findUnique({ where: { id: userId } }),
@@ -70,13 +68,11 @@ export class AnalyticsService {
           where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
           _sum: { calories: true, protein: true, carbs: true, fat: true },
         }),
-        // Fetch recent MEALS
         this.prisma.nutritionLog.findMany({
           where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
           orderBy: { createdAt: 'desc' },
           take: 5,
         }),
-        // Fetch recent SCANS
         this.prisma.productScan.findMany({
           where: { userId, createdAt: { gte: todayStart, lte: todayEnd } },
           orderBy: { createdAt: 'desc' },
@@ -89,7 +85,6 @@ export class AnalyticsService {
 
     if (!user || !profile) throw new NotFoundException('Complete Onboarding.');
 
-    // 2. Merge and Sort Recent Activity
     const combinedHistory = [
       ...recentLogEntries.map((m) => ({
         id: m.id,
@@ -104,14 +99,14 @@ export class AnalyticsService {
         id: s.id,
         type: 'SCAN' as const,
         name: s.productName || 'Scanned Product',
-        kcal: null, // Scans might not have calories immediately
+        kcal: null,
         time: s.createdAt,
         imageUrl: s.imageUrl,
         meta: { novaScore: s.novaScore, isSafe: s.isSafe },
       })),
     ]
-      .sort((a, b) => b.time.getTime() - a.time.getTime()) // Sort by newest first
-      .slice(0, 5); // Take top 5
+      .sort((a, b) => b.time.getTime() - a.time.getTime())
+      .slice(0, 5);
 
     const dashboardData: DashboardData = {
       avatar: user.profileImage,
@@ -146,47 +141,97 @@ export class AnalyticsService {
   }
 
   // ==================================================================
-  // 📈 ANALYTICS
+  // 📈 ANALYTICS (Dynamic Period: 7D, 14D, 30D, ALL)
   // ==================================================================
-  async getAnalytics(userId: string): Promise<AnalyticsData> {
-    const cacheKey = `analytics:${userId}`;
+  async getAnalytics(userId: string, period: string): Promise<AnalyticsData> {
+    // 1. Create a unique cache key based on the period
+    const cacheKey = `analytics:${userId}:${period}`;
     const cached = await this.redis.get<AnalyticsData>(cacheKey);
     if (cached) return cached;
 
-    const [scans, user, novaggr, novaGroups, weightTrend] = await Promise.all([
-      this.prisma.productScan.count({ where: { userId } }),
-      this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { currentLoginStreak: true, xp: true },
-      }),
-      this.prisma.productScan.aggregate({
-        where: { userId },
-        _avg: { novaScore: true },
-      }),
-      this.prisma.productScan.groupBy({
-        by: ['novaScore'],
-        where: { userId },
-        _count: { novaScore: true },
-      }),
-      this.prisma.dailyLog.findMany({
-        where: { userId, date: { gte: subDays(new Date(), 7) } },
-        orderBy: { date: 'asc' },
-        select: { date: true, caloriesIn: true, weightKg: true },
-      }),
-    ]);
+    // 2. Determine Date Filters & Cache TTL
+    let dateFilter: any = {};
+    let cacheTTL = 900; // Default 15 mins
 
+    const now = new Date();
+
+    switch (period) {
+      case '7D':
+        dateFilter = { gte: subDays(now, 7) };
+        cacheTTL = 300; // 5 mins (Data changes frequently)
+        break;
+      case '14D':
+        dateFilter = { gte: subDays(now, 14) };
+        cacheTTL = 600; // 10 mins
+        break;
+      case '30D':
+        dateFilter = { gte: subDays(now, 30) };
+        cacheTTL = 1800; // 30 mins
+        break;
+      case 'ALL':
+        dateFilter = {}; // No limit
+        cacheTTL = 3600; // 1 hour (Historical data is stable)
+        break;
+      default:
+        // Fallback to 7D if invalid input
+        dateFilter = { gte: subDays(now, 7) };
+    }
+
+    // 3. Execute Queries in Parallel with Date Filter applied
+    const [scansCount, user, novaggr, novaGroups, weightTrend] =
+      await Promise.all([
+        // Count scans in this period
+        this.prisma.productScan.count({
+          where: { userId, createdAt: dateFilter },
+        }),
+
+        // Get user streak (Global stat, but we need it for summary)
+        this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { currentLoginStreak: true },
+        }),
+
+        // Average NOVA score for this period
+        this.prisma.productScan.aggregate({
+          where: { userId, createdAt: dateFilter },
+          _avg: { novaScore: true },
+        }),
+
+        // NOVA Distribution for this period
+        this.prisma.productScan.groupBy({
+          by: ['novaScore'],
+          where: { userId, createdAt: dateFilter },
+          _count: { novaScore: true },
+        }),
+
+        // Weight/Calorie Trends for this period
+        this.prisma.dailyLog.findMany({
+          where: { userId, date: dateFilter },
+          orderBy: { date: 'asc' },
+          select: { date: true, caloriesIn: true, weightKg: true },
+        }),
+      ]);
+
+    // 4. Calculate Scores
     const totalNovaPoints = novaGroups.reduce(
       (acc, curr) => acc + curr.novaScore * curr._count.novaScore,
       0,
     );
-    const avgNova = novaggr._avg.novaScore || 4;
-    const healthScore = Math.max(0, Math.round(((4 - avgNova) / 3) * 100));
+
+    // Default to 4 (worst) if no scans exist in period
+    const avgNova = novaggr._avg.novaScore || 0;
+
+    // Calculate Health Score (Simple algorithm: Lower NOVA = Higher Score)
+    // If no scans (avgNova is 0), score is 0.
+    // If avgNova is 1 (Best), score is 100. If 4 (Worst), score is 0.
+    const healthScore =
+      avgNova === 0 ? 0 : Math.max(0, Math.round(((4 - avgNova) / 3) * 100));
 
     const analyticsData: AnalyticsData = {
       summary: {
         nutritionalHealthScore: healthScore,
         totalPts: totalNovaPoints,
-        totalProductsAnalysed: scans,
+        totalProductsAnalysed: scansCount,
         currentStreak: user?.currentLoginStreak || 0,
       },
       novaDistribution: novaGroups.map((g) => ({
@@ -197,7 +242,9 @@ export class AnalyticsService {
       trends: weightTrend,
     };
 
-    await this.redis.set(cacheKey, analyticsData, 900);
+    // 5. Store in Redis with dynamic TTL
+    await this.redis.set(cacheKey, analyticsData, cacheTTL);
+
     return analyticsData;
   }
 
@@ -209,8 +256,9 @@ export class AnalyticsService {
     const cached = await this.redis.get<{ insight: string }>(cacheKey);
     if (cached) return cached;
 
+    // Use default (7D) context for AI to keep it relevant to recent habits
     const dashboard = await this.getDashboard(userId);
-    const analytics = await this.getAnalytics(userId);
+    const analytics = await this.getAnalytics(userId, '7D');
 
     const healthScore = analytics.summary.nutritionalHealthScore;
     const remainingKcal = dashboard.calories.remaining;
@@ -223,17 +271,18 @@ export class AnalyticsService {
     const prompt = `
       User Nutrition Context:
       - Health Score: ${healthScore}/100
-      - Scanned Products: ${totalScans}
+      - Scanned Products (Last 7 Days): ${totalScans}
       - Energy Balance: ${remainingKcal} kcal left for today.
       - UPF Risk: ${hasHighUpf ? 'High' : 'Low'}
       
       Act as a helpful health coach. Provide 3 specific, actionable nutrition tips based on this data.
+      Keep it short and encouraging.
     `;
 
     const insightText = await this.llm.generateText(prompt);
     const result = { insight: insightText, generatedAt: new Date() };
 
-    await this.redis.set(cacheKey, result, 3600);
+    await this.redis.set(cacheKey, result, 3600); // Cache insights for 1 hour
     return result;
   }
 }
