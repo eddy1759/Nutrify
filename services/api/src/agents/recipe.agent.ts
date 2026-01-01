@@ -240,6 +240,37 @@ export class RecipeAgent {
     };
   }
 
+  async deleteRecipe(userId: string, recipeId: string) {
+    // 1. Verify existence AND ownership
+    // We use findFirst ensures we only find it if it belongs to THIS user
+    const recipe = await this.prisma.savedRecipe.findFirst({
+      where: {
+        id: recipeId,
+        userId: userId,
+      },
+    });
+
+    if (!recipe) {
+      throw new NotFoundException('Recipe not found in your cookbook');
+    }
+
+    // 2. Perform Hard Delete
+    await this.prisma.savedRecipe.delete({
+      where: { id: recipeId },
+    });
+
+    // 3. Optional: Emit event (if you want to track deletions for analytics)
+    this.amqpConnection
+      .publish('nutrify.events', 'user.recipe_deleted', {
+        userId,
+        recipeId,
+        timestamp: new Date(),
+      })
+      .catch((e) => this.logger.error('Failed to emit delete event', e));
+
+    return { success: true, message: 'Recipe removed from cookbook' };
+  }
+
   private async fetchRecipeImage(recipeName: string): Promise<string> {
     try {
       /*
