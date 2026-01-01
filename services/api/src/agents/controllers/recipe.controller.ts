@@ -4,18 +4,23 @@ import {
   Body,
   UseGuards,
   BadRequestException,
+  Get,
+  Query,
+  DefaultValuePipe,
+  ParseIntPipe,
+  Param,
 } from '@nestjs/common';
 import { AtGuard } from '../../auth/guard/at.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { RecipeAgent } from '../recipe.agent';
 import { Recipe } from '../types/nutrition.types';
 
-@Controller('agents/recipes') // Base route: /agents/recipes
+@Controller('agents/recipes')
 @UseGuards(AtGuard)
 export class RecipeController {
   constructor(private readonly recipe: RecipeAgent) {}
 
-  @Post('suggest') // -> /agents/recipes/suggest
+  @Post('suggest')
   async suggestRecipes(
     @Body() body: { ingredients: string[]; context?: string },
     @CurrentUser('id') userId: string,
@@ -33,7 +38,7 @@ export class RecipeController {
     return { success: true, count: suggestions.length, data: suggestions };
   }
 
-  @Post('modify') // -> /agents/recipes/modify
+  @Post('modify')
   async modifyRecipe(@Body() body: { recipe: any; request: string }) {
     const recipeStr =
       typeof body.recipe === 'string'
@@ -51,5 +56,33 @@ export class RecipeController {
     @Body() body: { recipe: Recipe },
   ) {
     return this.recipe.logToDB(userId, body.recipe);
+  }
+
+  @Get('cookbook') // -> GET /agents/recipes/cookbook?page=1&difficulty=Easy
+  async getCookbook(
+    @CurrentUser('id') userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query('search') search?: string,
+    @Query('difficulty') difficulty?: string,
+    @Query('tag') tag?: string,
+    @Query('sort') sort?: 'newest' | 'oldest' | 'a-z',
+  ) {
+    return this.recipe.getCookbook(userId, {
+      page,
+      limit,
+      search,
+      difficulty,
+      tag,
+      sort,
+    });
+  }
+
+  @Get('cookbook/:id') // -> GET /agents/recipes/cookbook/123-uuid
+  async getRecipeById(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+  ) {
+    return this.recipe.getRecipeDetail(userId, id);
   }
 }
