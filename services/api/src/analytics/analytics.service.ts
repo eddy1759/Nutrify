@@ -3,41 +3,12 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { startOfDay, endOfDay, subDays } from 'date-fns';
 import { LlmLanguageProvider } from '../llm-core/llm.provider';
-
-export interface DashboardData {
-  avatar: string;
-  calories: { target: number; current: number; remaining: number };
-  macros: {
-    protein: { current: number; target: number };
-    fat: { current: number; target: number };
-    carbs: { current: number; target: number };
-  };
-  biometrics: { waterMl: number; weightKg: number | null };
-  recentMeals: Array<{
-    id: string;
-    type: 'MEAL' | 'SCAN';
-    name: string;
-    kcal: number | null;
-    time: Date;
-    imageUrl: string | null;
-    meta?: any;
-  }>;
-}
-
-export interface AnalyticsData {
-  summary: {
-    nutritionalHealthScore: number;
-    totalPts: number;
-    totalProductsAnalysed: number;
-    currentStreak: number;
-  };
-  novaDistribution: Array<{
-    group: number;
-    label: string;
-    count: number;
-  }>;
-  trends: any[];
-}
+import {
+  DashboardData,
+  AnalyticsData,
+  ScanHistoryItem,
+  PaginatedHistoryResponse,
+} from './dto/analytics.dto';
 
 @Injectable()
 export class AnalyticsService {
@@ -49,9 +20,6 @@ export class AnalyticsService {
     private readonly redis: RedisService,
   ) {}
 
-  // ==================================================================
-  // 🍎 DASHBOARD (Unchanged - Keeps 2 min cache)
-  // ==================================================================
   async getDashboard(userId: string): Promise<DashboardData> {
     const cacheKey = `dashboard:${userId}`;
     const cached = await this.redis.get<DashboardData>(cacheKey);
@@ -152,16 +120,11 @@ export class AnalyticsService {
     return dashboardData;
   }
 
-  // ==================================================================
-  // 📈 ANALYTICS (Dynamic Period: 7D, 14D, 30D, ALL)
-  // ==================================================================
   async getAnalytics(userId: string, period: string): Promise<AnalyticsData> {
-    // 1. Create a unique cache key based on the period
     const cacheKey = `analytics:${userId}:${period}`;
     const cached = await this.redis.get<AnalyticsData>(cacheKey);
     if (cached) return cached;
 
-    // 2. Determine Date Filters & Cache TTL
     let dateFilter: any = {};
     let cacheTTL = 900; // Default 15 mins
 
@@ -189,7 +152,7 @@ export class AnalyticsService {
         dateFilter = { gte: subDays(now, 7) };
     }
 
-    // 3. Execute Queries in Parallel with Date Filter applied
+    // Queries executed in parallel with date filter applied
     const [scansCount, mealsCount, user, novaggr, novaGroups, weightTrend] =
       await Promise.all([
         // Count scans in this period
@@ -228,7 +191,6 @@ export class AnalyticsService {
         }),
       ]);
 
-    // 4. Calculate Scores
     const totalNovaPoints = novaGroups.reduce(
       (acc, curr) => acc + curr.novaScore * curr._count.novaScore,
       0,
@@ -260,15 +222,12 @@ export class AnalyticsService {
       trends: weightTrend,
     };
 
-    // 5. Store in Redis with dynamic TTL
+    // caching with dynamic TTL
     await this.redis.set(cacheKey, analyticsData, cacheTTL);
 
     return analyticsData;
   }
 
-  // ==================================================================
-  // 🤖 AI INSIGHTS
-  // ==================================================================
   async getAiInsights(userId: string) {
     const cacheKey = `ai_insights:${userId}`;
     const cached = await this.redis.get<{ insight: string }>(cacheKey);
@@ -302,5 +261,68 @@ export class AnalyticsService {
 
     await this.redis.set(cacheKey, result, 3600); // Cache insights for 1 hour
     return result;
+  }
+
+  async getScanHistory(
+    userId: string,
+    page: number = 1,
+    limit: number = 20,
+  ): Promise<PaginatedHistoryResponse> {
+    const offset = (page - 1) * limit;
+
+    const [scanCount, mealsCount] = await Promise.all([
+      this.prisma.productScan.count({ where: { userId } }),
+      this.prisma.nutritionLog.count({ where: { userId } }),
+    ]);
+    const total = scanCount + mealsCount;
+
+    const rawData = await this.prisma.$queryRaw<any[]>`
+      SELECT
+        id,
+        'SCAN' as type
+        COALESCE("productName", "Unknown Product") as name,
+        "imageUrl",
+        "createdAt" as time,
+        "novaScore",
+        NULL as calories
+        FROM "ProductScan"
+        WHERE "userId" = ${userId}
+
+        UNION ALL
+
+      SELECT 
+        id, 
+        'MEAL' as type, 
+        "foodName" as name, 
+        "imageUrl", 
+        "createdAt" as time, 
+        NULL as "novaScore", 
+        calories
+      FROM "NutritionLog"
+      WHERE "userId" = ${userId}
+
+      ORDER BY time DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+
+    const data: ScanHistoryItem[] = rawData.map((item) => ({
+      id: item.id,
+      type: item.type,
+      name: item.name,
+      imageUrl: item.imageUrl,
+      time: item.time,
+      novaScore: item.novaScore,
+      calories: item.calories,
+    }));
+
+    return {
+      data,
+      meta: {
+        total,
+        page,
+        lastPage: Math.ceil(total / limit),
+        hasNextPage: offset * limit < total,
+      },
+    };
   }
 }
