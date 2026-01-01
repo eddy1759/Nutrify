@@ -1,11 +1,15 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Query,
+  UseGuards,
+  ParseIntPipe,
+  DefaultValuePipe,
+} from '@nestjs/common';
 import { AtGuard } from '../auth/guard/at.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import {
-  AnalyticsService,
-  DashboardData,
-  AnalyticsData,
-} from './analytics.service';
+import { AnalyticsService } from './analytics.service';
+import { DashboardData, AnalyticsData } from './dto/analytics.dto';
 
 @Controller('analytics')
 @UseGuards(AtGuard)
@@ -31,5 +35,14 @@ export class AnalyticsController {
   @Get('ai-insights')
   async getInsights(@CurrentUser('id') userId: string) {
     return this.analyticsService.getAiInsights(userId);
+  }
+
+  @Get('history')
+  async getHistory(
+    @CurrentUser('id') userId: string,
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+  ) {
+    return this.analyticsService.getScanHistory(userId, page, limit);
   }
 }
