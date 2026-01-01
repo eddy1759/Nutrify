@@ -9,6 +9,7 @@ import {
   DefaultValuePipe,
   ParseIntPipe,
   Param,
+  Delete,
 } from '@nestjs/common';
 import { AtGuard } from '../../auth/guard/at.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
@@ -50,7 +51,7 @@ export class RecipeController {
     return { success: true, data: modified };
   }
 
-  @Post('save') // -> /agents/recipes/save
+  @Post('save')
   async saveRecipe(
     @CurrentUser('id') userId: string,
     @Body() body: { recipe: Recipe },
@@ -58,7 +59,7 @@ export class RecipeController {
     return this.recipe.logToDB(userId, body.recipe);
   }
 
-  @Get('cookbook') // -> GET /agents/recipes/cookbook?page=1&difficulty=Easy
+  @Get('cookbook')
   async getCookbook(
     @CurrentUser('id') userId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
@@ -78,11 +79,19 @@ export class RecipeController {
     });
   }
 
-  @Get('cookbook/:id') // -> GET /agents/recipes/cookbook/123-uuid
+  @Get('cookbook/:id')
   async getRecipeById(
     @CurrentUser('id') userId: string,
     @Param('id') id: string,
   ) {
     return this.recipe.getRecipeDetail(userId, id);
+  }
+
+  @Delete('cookbook/:id')
+  async deleteRecipe(
+    @CurrentUser('id') userId: string,
+    @Param('id') id: string,
+  ) {
+    return this.recipe.deleteRecipe(userId, id);
   }
 }
