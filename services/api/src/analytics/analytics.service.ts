@@ -277,18 +277,18 @@ export class AnalyticsService {
     const total = scanCount + mealsCount;
 
     const rawData = await this.prisma.$queryRaw<any[]>`
-      SELECT
-        id,
-        'SCAN' as type
-        COALESCE("productName", "Unknown Product") as name,
-        "imageUrl",
-        "createdAt" as time,
-        "novaScore",
+      SELECT 
+        id, 
+        'SCAN' as type, 
+        COALESCE("productName", 'Unknown Product') as name, 
+        "imageUrl", 
+        "createdAt" as time, 
+        "novaScore", 
         NULL as calories
-        FROM "ProductScan"
-        WHERE "userId" = ${userId}
+      FROM "ProductScan"
+      WHERE "userId" = ${userId}
 
-        UNION ALL
+      UNION ALL
 
       SELECT 
         id, 
