@@ -233,6 +233,7 @@ export const RecipeSchema = z.object({
   difficulty: z.enum(['Easy', 'Medium', 'Hard']),
   macrosPerServing: MacroSchema,
   tags: z.array(z.string()).optional(),
+  imageUrl: z.string().optional(),
 });
 
 export type Recipe = z.infer<typeof RecipeSchema>;
