@@ -99,6 +99,30 @@ flowchart TD
 
 ```
 ---
+
+## ⚡ Inference Performance & Evaluation
+
+Inference benchmarks were measured against the deployed FastAPI ML service running
+a quantized DistilBERT model via ONNX Runtime.
+
+**Environment**
+- Deployment: Hugging Face Spaces (shared CPU)
+- Inference backend: ONNX Runtime (CPU)
+- Batch size: 1
+- Requests: 100 sequential HTTP requests
+
+**Latency**
+- p50 latency: ~1.7s
+- p95 latency: ~2.0s
+
+**Throughput**
+- ~0.57 requests/sec (single worker)
+
+**Notes**
+- Measurements reflect real end-to-end inference latency (HTTP → FastAPI → ONNX → response)
+- Inference is isolated in a stateless service decoupled from orchestration and business logic
+- Latency is primarily constrained by shared CPU resources and lack of request batching
+---
 ## 🤖 AI Agent Ecosystem
 
 <details>
@@ -162,7 +186,7 @@ flowchart TD
 
 ### Explainability Strategy
 - BERT for deterministic scoring  
-- LLMs only for non-deterministic reasoning  
+- LLMs only for non-deterministic reasoning 
 
 ---
 
@@ -189,6 +213,7 @@ flowchart TD
 - Docker & Docker Compose  
 
 ---
+\
 ## 🚀 Quick Start
 
 ### 📊 ML Pipeline
